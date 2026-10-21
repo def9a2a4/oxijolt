@@ -11651,3 +11651,6 @@ unsafe extern "C" {
         errorCapacity: u32,
     ) -> *mut JPH_Shape;
 }
+unsafe extern "C" {
+    pub fn JPH_JobSystemSingleThreaded_Create(maxJobs: u32) -> *mut JPH_JobSystem;
+}

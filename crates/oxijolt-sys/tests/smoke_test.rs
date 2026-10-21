@@ -172,3 +172,65 @@ fn callback_job_system_steps_a_world() {
         JPH_BodyInterface_RemoveAndDestroyBody(bodies, floor);
     }
 }
+
+#[test]
+fn single_threaded_job_system_steps_a_world() {
+    init();
+    // SAFETY: Jolt is initialised and 0 selects Jolt's default job capacity.
+    let job_system = unsafe { JPH_JobSystemSingleThreaded_Create(0) };
+    // SAFETY: `job_system` was just created after `init` and nothing else owns it.
+    let world = unsafe { TestWorld::with_job_system(job_system) };
+    drop_box_onto_floor(&world, |world| world.step(1.0 / 60.0));
+}
+
+#[test]
+fn single_threaded_job_system_runs_several_collision_steps() {
+    init();
+    // SAFETY: Jolt is initialised. 256 jobs cover the at most 91 that a four-step update of a
+    // concurrency-1 job system creates.
+    let job_system = unsafe { JPH_JobSystemSingleThreaded_Create(256) };
+    // SAFETY: `job_system` was just created after `init` and nothing else owns it.
+    let world = unsafe { TestWorld::with_job_system(job_system) };
+    drop_box_onto_floor(&world, |world| {
+        world.step_with_collision_steps(1.0 / 60.0, 4)
+    });
+}
+
+/// Drops a box from 2 m onto a floor, advances `world` 60 times with `step` and checks that the
+/// box came to rest on the floor, then removes both bodies.
+fn drop_box_onto_floor(world: &TestWorld, step: impl Fn(&TestWorld)) {
+    let bodies = world.body_interface();
+    let floor = create_box(
+        bodies,
+        vec3(100.0, 1.0, 100.0),
+        rvec3(0.0, -1.0, 0.0),
+        JPH_MotionType_Static,
+        OL_NON_MOVING,
+        JPH_Activation_DontActivate,
+    );
+    let falling = create_box(
+        bodies,
+        vec3(0.5, 0.5, 0.5),
+        rvec3(0.0, 2.0, 0.0),
+        JPH_MotionType_Dynamic,
+        OL_MOVING,
+        JPH_Activation_Activate,
+    );
+
+    for _ in 0..60 {
+        step(world);
+    }
+
+    let mut position = rvec3(0.0, 0.0, 0.0);
+    // SAFETY: `bodies` belongs to the live `world`, `falling` is a body in it
+    // and `position` is a live local.
+    unsafe { JPH_BodyInterface_GetPosition(bodies, falling, &mut position) };
+    // The floor's top face is at y = 0 and the box's half height is 0.5.
+    assert!(position.y > 0.45 && position.y < 0.55, "{position:?}");
+
+    // SAFETY: both ids are bodies of the live `world`, each removed once.
+    unsafe {
+        JPH_BodyInterface_RemoveAndDestroyBody(bodies, falling);
+        JPH_BodyInterface_RemoveAndDestroyBody(bodies, floor);
+    }
+}

@@ -497,4 +497,13 @@ JPH_CAPI void JPH_ShapeBinaryState_Destroy(JPH_ShapeBinaryState* state);
    records can make it read and write out of bounds. */
 JPH_CAPI JPH_Shape* JPH_Shape_RestoreBinaryState(const void* data, size_t size, char* error, uint32_t errorCapacity);
 
+/* JobSystem */
+/* Jolt's JobSystemSingleThreaded: runs each job on the calling thread as soon as it is ready, with
+   concurrency 1 and no worker threads. maxJobs is how many jobs may be allocated at once, 0 for
+   Jolt's cMaxPhysicsJobs; a smaller value must cover every job alive during one update, or Jolt
+   asserts and a release build reads out of bounds. Call after JPH_Init. The caller owns the result
+   and destroys it with JPH_JobSystem_Destroy, after the last JPH_PhysicsSystem_Update2 that used it
+   returned. Not a reference-counted object; the handle is opaque. */
+JPH_CAPI JPH_JobSystem* JPH_JobSystemSingleThreaded_Create(uint32_t maxJobs);
+
 #endif /* JOLT_C_EXT_H_ */
