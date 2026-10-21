@@ -95,8 +95,8 @@ impl JobSystem for InlineJobs {
     }
 }
 
-/// Tells a determinism child which job system its worlds use: `rayon` or `inline`; unset for
-/// Jolt's thread pool.
+/// Tells a determinism child which job system its worlds use: `rayon`, `inline` or `single` (Jolt's
+/// single-threaded job system); unset for Jolt's thread pool.
 pub const JOBS_ENV: &str = "OXIJOLT_DIGEST_JOBS";
 
 /// The job system of the worlds of this process.
@@ -108,6 +108,8 @@ pub enum JobChoice {
     Rayon,
     /// [`InlineJobs`] with concurrency 3, whatever thread count is requested.
     Inline,
+    /// Jolt's single-threaded job system, whatever thread count is requested.
+    SingleThreaded,
 }
 
 impl JobChoice {
@@ -117,6 +119,7 @@ impl JobChoice {
             Self::Native => None,
             Self::Rayon => Some("rayon"),
             Self::Inline => Some("inline"),
+            Self::SingleThreaded => Some("single"),
         }
     }
 
@@ -126,6 +129,7 @@ impl JobChoice {
             Err(std::env::VarError::NotPresent) => Self::Native,
             Ok(value) if value == "rayon" => Self::Rayon,
             Ok(value) if value == "inline" => Self::Inline,
+            Ok(value) if value == "single" => Self::SingleThreaded,
             value => panic!("{JOBS_ENV}={value:?} is not a job system"),
         }
     }
@@ -137,5 +141,6 @@ pub fn with_threads(settings: WorldSettings, worker_threads: u32) -> WorldSettin
         JobChoice::Native => settings.worker_threads(worker_threads),
         JobChoice::Rayon => settings.job_system(Arc::new(RayonJobs::new(worker_threads as usize))),
         JobChoice::Inline => settings.job_system(Arc::new(InlineJobs { concurrency: 3 })),
+        JobChoice::SingleThreaded => settings.single_threaded(),
     }
 }

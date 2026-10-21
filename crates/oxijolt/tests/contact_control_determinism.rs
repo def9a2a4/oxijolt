@@ -606,7 +606,9 @@ fn contact_control_child() {
     let job_choice = JobChoice::from_env();
     let digest = run(&scene, threads, &variant);
     match job_choice {
-        JobChoice::Native => assert_eq!(jobs::queued(), 0, "a caller job system was used"),
+        JobChoice::Native | JobChoice::SingleThreaded => {
+            assert_eq!(jobs::queued(), 0, "a caller job system was used")
+        }
         _ => assert!(
             jobs::queued() > 0,
             "the {job_choice:?} job system was handed no job"

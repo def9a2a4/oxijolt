@@ -126,7 +126,9 @@ fn body_poses_child() {
     };
     // Without this a job system choice that never reached the world would pass as the native run.
     match JobChoice::from_env() {
-        JobChoice::Native => assert_eq!(jobs::queued(), 0, "a caller job system was used"),
+        JobChoice::Native | JobChoice::SingleThreaded => {
+            assert_eq!(jobs::queued(), 0, "a caller job system was used")
+        }
         choice => assert!(
             jobs::queued() > 0,
             "the {choice:?} job system was handed no job"

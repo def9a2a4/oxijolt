@@ -1,6 +1,6 @@
 //! The physics world: a Jolt physics system with its own job system and temp allocator. The job
-//! system is Jolt's thread pool or a native object that hands jobs to the caller's
-//! [`JobSystem`].
+//! system is Jolt's thread pool, Jolt's single-threaded job system, or a native one that hands the
+//! jobs to the caller's [`JobSystem`].
 //!
 //! joltc keeps a global map of physics systems that creating and destroying a system writes
 //! without synchronisation, so both run under one process-wide lock here. Stepping uses the
@@ -66,6 +66,8 @@ fn lock_joltc_globals() -> MutexGuard<'static, ()> {
 enum JobSystemChoice {
     /// Jolt's thread pool with this many worker threads.
     ThreadPool(u32),
+    /// Jolt's single-threaded job system.
+    SingleThreaded,
     /// The caller's job system.
     Caller(Arc<dyn JobSystem>),
 }
@@ -74,6 +76,7 @@ impl fmt::Debug for JobSystemChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ThreadPool(workers) => f.debug_tuple("ThreadPool").field(workers).finish(),
+            Self::SingleThreaded => f.write_str("SingleThreaded"),
             Self::Caller(_) => f.write_str("Caller(JobSystem)"),
         }
     }
@@ -85,6 +88,7 @@ impl JobSystemChoice {
     fn max_concurrency(&self) -> Result<u32, WorldError> {
         match self {
             Self::ThreadPool(workers) => Ok(workers + 1),
+            Self::SingleThreaded => Ok(1),
             Self::Caller(job_system) => {
                 let value = job_system.max_concurrency();
                 if (1..=WorldSettings::MAX_CONCURRENCY).contains(&value) {
@@ -194,9 +198,11 @@ impl WorldSettings {
     /// Runs the world's jobs on Jolt's thread pool with `value` worker threads, in addition to
     /// the thread that calls [`PhysicsWorld::step`], which also runs jobs. At least 1 and at most
     /// [`WorldSettings::MAX_WORKER_THREADS`]. Default 1. The determinism tests get bit-identical
-    /// results with 1 and 4 workers on one machine ([docs/determinism.md]).
+    /// results with 1 and 4 workers on one machine ([docs/determinism.md]). 0 is refused;
+    /// [`single_threaded`](Self::single_threaded) runs without worker threads.
     ///
-    /// Of this and [`job_system`](Self::job_system), the call made last decides.
+    /// Of this, [`single_threaded`](Self::single_threaded) and [`job_system`](Self::job_system),
+    /// the call made last decides.
     ///
     /// [docs/determinism.md]: https://github.com/pockerhead/oxijolt/blob/main/docs/determinism.md
     #[must_use]
@@ -205,12 +211,28 @@ impl WorldSettings {
         self
     }
 
+    /// Runs the world's jobs with Jolt's single-threaded job system (`JobSystemSingleThreaded`):
+    /// every job runs on the thread that calls [`PhysicsWorld::step`] as soon as it is ready, with
+    /// concurrency 1, and Jolt starts no threads for the world. The determinism tests get the same
+    /// results as with Jolt's thread pool ([docs/determinism.md]).
+    ///
+    /// Of this, [`worker_threads`](Self::worker_threads) and [`job_system`](Self::job_system), the
+    /// call made last decides.
+    ///
+    /// [docs/determinism.md]: https://github.com/pockerhead/oxijolt/blob/main/docs/determinism.md
+    #[must_use]
+    pub fn single_threaded(mut self) -> Self {
+        self.jobs = JobSystemChoice::SingleThreaded;
+        self
+    }
+
     /// Runs the world's jobs on the caller's `value` instead of Jolt's thread pool; Jolt then
     /// starts no threads for the world. The world keeps the `Arc` as long as it lives, and
     /// [`PhysicsWorld::new`] reads [`JobSystem::max_concurrency`] once, which must be within
     /// `1..=`[`WorldSettings::MAX_CONCURRENCY`].
     ///
-    /// Of this and [`worker_threads`](Self::worker_threads), the call made last decides.
+    /// Of this, [`worker_threads`](Self::worker_threads) and
+    /// [`single_threaded`](Self::single_threaded), the call made last decides.
     #[must_use]
     pub fn job_system(mut self, value: Arc<dyn JobSystem>) -> Self {
         self.jobs = JobSystemChoice::Caller(value);
@@ -302,15 +324,17 @@ impl JoltObject for JPH_TempAllocator {
     }
 }
 
-/// A world's job system: Jolt's thread pool, owned by the world, or joltc's callback job system
-/// for the caller's [`JobSystem`], owned by the world and by every job still queued.
+/// A world's job system: Jolt's thread pool or single-threaded job system, owned by the world, or
+/// joltc's callback job system for the caller's [`JobSystem`], owned by the world and by every job
+/// still queued.
 impl JoltObject for JPH_JobSystem {
     unsafe fn destroy(ptr: *mut Self) {
         // SAFETY: the owner owns the job system (trait contract), and no step is running: `step`
         // borrows the world mutably, and the last owner of a callback job system holds no job
         // that Jolt could still run. Destroying a thread pool joins its worker threads; a
-        // callback job system has no threads and may be destroyed on any thread, also on one of
-        // the caller's pool threads.
+        // single-threaded job system has no threads and keeps only its free list of jobs
+        // (`JobSystemSingleThreaded.cpp`); a callback job system has no threads and may be
+        // destroyed on any thread, also on one of the caller's pool threads.
         unsafe { JPH_JobSystem_Destroy(ptr) };
     }
 }
@@ -319,6 +343,8 @@ impl JoltObject for JPH_JobSystem {
 enum WorldJobSystem {
     /// Jolt's thread pool.
     ThreadPool(Owned<JPH_JobSystem>),
+    /// Jolt's single-threaded job system.
+    SingleThreaded(Owned<JPH_JobSystem>),
     /// joltc's callback job system, which hands jobs to the caller's [`JobSystem`].
     Caller(Arc<QueueContext>),
 }
@@ -341,9 +367,20 @@ impl WorldJobSystem {
         Ok(Self::ThreadPool(pool))
     }
 
+    /// Creates Jolt's single-threaded job system.
+    fn single_threaded() -> Result<Self, WorldError> {
+        // SAFETY: Jolt is initialised (`PhysicsWorld::new` checked `ensure_initialized` first). 0
+        // selects Jolt's `cMaxPhysicsJobs`, more jobs than one update of a concurrency-1 job
+        // system holds at once (docs/limits.md#collision-steps). The handle takes over the
+        // returned job system.
+        let jobs = unsafe { Owned::from_raw(JPH_JobSystemSingleThreaded_Create(0)) }
+            .ok_or(WorldError::AllocationFailed("job system"))?;
+        Ok(Self::SingleThreaded(jobs))
+    }
+
     fn as_ptr(&self) -> *mut JPH_JobSystem {
         match self {
-            Self::ThreadPool(pool) => pool.as_ptr(),
+            Self::ThreadPool(pool) | Self::SingleThreaded(pool) => pool.as_ptr(),
             Self::Caller(context) => context.as_ptr(),
         }
     }
@@ -352,7 +389,7 @@ impl WorldJobSystem {
     /// the stepping thread and returns the first panic of its `queue_job` during the step.
     fn finish_update(&self) -> Option<Box<dyn Any + Send>> {
         match self {
-            Self::ThreadPool(_) => None,
+            Self::ThreadPool(_) | Self::SingleThreaded(_) => None,
             Self::Caller(context) => context.finish_update(),
         }
     }
@@ -394,8 +431,8 @@ pub(crate) fn advance_structure_epoch(epoch: &mut u64) {
 
 /// A Jolt physics system with its collision layers, its own job system and temp allocator.
 ///
-/// The job system is Jolt's thread pool, or a native one that hands the jobs to the caller's
-/// [`JobSystem`] ([`WorldSettings::job_system`]).
+/// The job system is Jolt's thread pool, Jolt's single-threaded job system, or a native one that
+/// hands the jobs to the caller's [`JobSystem`] ([`WorldSettings::job_system`]).
 ///
 /// Changing the world, including [`step`](Self::step), takes `&mut self`; reading takes
 /// `&self`, so many threads can read one world while nobody steps it. Several worlds are
@@ -496,7 +533,9 @@ impl Drop for PhysicsWorld {
 // allocator and job system serve one call at a time
 // (https://jrouwe.github.io/JoltPhysicsDocs/5.6.0/index.html#multi-threaded-access). A caller
 // job system is `Send + Sync` by the `JobSystem` bound, and its native callback object is
-// `Send + Sync` (see `CallbackJobSystem`).
+// `Send + Sync` (see `CallbackJobSystem`). Jolt's single-threaded job system runs jobs on the
+// stepping thread and holds no thread-local or thread-bound state, so it has no thread affinity
+// either.
 unsafe impl Send for PhysicsWorld {}
 // SAFETY: no `&self` method touches the job system. Every `&self` method only calls Jolt's
 // locking body interface, read-only system
@@ -606,6 +645,7 @@ impl PhysicsWorld {
 
         let job_system = match &settings.jobs {
             JobSystemChoice::ThreadPool(workers) => WorldJobSystem::thread_pool(*workers)?,
+            JobSystemChoice::SingleThreaded => WorldJobSystem::single_threaded()?,
             JobSystemChoice::Caller(job_system) => WorldJobSystem::Caller(
                 create_caller_job_system(Arc::clone(job_system), max_concurrency)?,
             ),

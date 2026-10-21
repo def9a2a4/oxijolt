@@ -1,7 +1,7 @@
-//! Worlds that run Jolt's jobs on a caller job system: results equal to Jolt's thread pool,
-//! jobs run inside `queue_job`, re-entrant steps, jobs that outlive their world, panics in the
-//! caller's `queue_job`, the concurrency bound, Jolt's job pool at the largest collision step
-//! count and the choice between the two job systems.
+//! Worlds that run Jolt's jobs on a caller job system or Jolt's single-threaded job system:
+//! results equal to Jolt's thread pool, jobs run inside `queue_job`, re-entrant steps, jobs that
+//! outlive their world, panics in the caller's `queue_job`, the concurrency bound, Jolt's job
+//! pool at the largest collision step count and the choice between the job systems.
 
 mod common;
 
@@ -446,6 +446,68 @@ fn the_last_of_job_system_and_worker_threads_wins() {
     );
     stacks_digest(settings);
     assert!(jobs.queued() > 0);
+}
+
+fn single_threaded() -> WorldSettings {
+    WorldSettings::default().single_threaded()
+}
+
+#[test]
+fn single_threaded_matches_the_native_pool() {
+    assert_eq!(stacks_digest(single_threaded()), stacks_digest(native()));
+    assert_eq!(
+        ragdoll_pile_digest(single_threaded()),
+        ragdoll_pile_digest(native())
+    );
+}
+
+#[test]
+fn the_last_of_three_job_system_choices_wins() {
+    let jobs = Arc::new(Counting::new(InlineJobs { concurrency: 3 }));
+    let settings = WorldSettings::default()
+        .job_system(jobs.clone())
+        .single_threaded();
+    assert!(
+        format!("{settings:?}").contains("SingleThreaded"),
+        "{settings:?}"
+    );
+    stacks_digest(settings);
+    assert_eq!(jobs.queued(), 0);
+
+    let settings = single_threaded().job_system(jobs.clone());
+    assert!(
+        format!("{settings:?}").contains("Caller(JobSystem)"),
+        "{settings:?}"
+    );
+    stacks_digest(settings);
+    assert!(jobs.queued() > 0);
+}
+
+#[test]
+fn a_single_threaded_world_steps_on_another_thread() {
+    const MOVED_TICKS: usize = 60;
+    let mut world = PhysicsWorld::new(single_threaded()).unwrap();
+    let ids = build_stacks(&mut world);
+    let moved = thread::spawn(move || run_digest(&mut world, &ids, MOVED_TICKS))
+        .join()
+        .unwrap();
+
+    let mut world = PhysicsWorld::new(single_threaded()).unwrap();
+    let ids = build_stacks(&mut world);
+    assert_eq!(moved, run_digest(&mut world, &ids, MOVED_TICKS));
+}
+
+#[test]
+fn worlds_with_different_native_job_systems_step_in_parallel() {
+    let (pool, single) = with_timeout(TIMEOUT_SECS, || {
+        thread::scope(|scope| {
+            let pool = scope.spawn(|| stacks_digest(native()));
+            let single = scope.spawn(|| stacks_digest(single_threaded()));
+            (pool.join().unwrap(), single.join().unwrap())
+        })
+    });
+    assert_eq!(pool, stacks_digest(native()));
+    assert_eq!(single, stacks_digest(single_threaded()));
 }
 
 /// A floor and 2048 awake unit cubes in a 16 x 16 grid of columns of 8, stepped 30 times with

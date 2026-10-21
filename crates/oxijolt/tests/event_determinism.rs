@@ -371,7 +371,9 @@ fn event_determinism_child() {
         scenario => panic!("unknown scenario {scenario}"),
     };
     match job_choice {
-        JobChoice::Native => assert_eq!(jobs::queued(), 0, "a caller job system was used"),
+        JobChoice::Native | JobChoice::SingleThreaded => {
+            assert_eq!(jobs::queued(), 0, "a caller job system was used")
+        }
         _ => assert!(
             jobs::queued() > 0,
             "the {job_choice:?} job system was handed no job"
@@ -399,6 +401,13 @@ fn sub_stepped_events_are_identical_with_1_and_4_workers() {
 #[test]
 fn events_are_identical_with_caller_job_systems() {
     assert_caller_job_systems_agree(CHILD, "events", "events");
+}
+
+#[test]
+fn events_are_identical_with_the_single_threaded_job_system() {
+    for scenario in ["events", "sub_stepped_events"] {
+        assert_single_threaded_agrees(CHILD, scenario, "events");
+    }
 }
 
 #[test]

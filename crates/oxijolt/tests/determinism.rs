@@ -913,7 +913,9 @@ fn determinism_child() {
     // Without these checks a choice that never reached the worlds, or a Rayon pool that never
     // ran a job, would pass as the native run: Jolt's update barrier runs every job itself.
     match job_choice {
-        JobChoice::Native => assert_eq!(jobs::queued(), 0, "a caller job system was used"),
+        JobChoice::Native | JobChoice::SingleThreaded => {
+            assert_eq!(jobs::queued(), 0, "a caller job system was used")
+        }
         _ => assert!(
             jobs::queued() > 0,
             "the {job_choice:?} job system was handed no job"
@@ -984,6 +986,55 @@ fn constraint_digest_is_identical_with_caller_job_systems() {
 #[test]
 fn soft_body_digest_is_identical_with_caller_job_systems() {
     assert_caller_job_systems_agree("determinism_child", "soft_bodies", "forward");
+}
+
+#[test]
+fn stacks_digest_is_identical_with_the_single_threaded_job_system() {
+    for variant in ["forward", "rebased", "sub_stepped"] {
+        assert_single_threaded_agrees("determinism_child", "stacks", variant);
+    }
+}
+
+#[test]
+fn pile_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "pile", "forward");
+}
+
+#[test]
+fn chunk_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "chunk", "forward");
+}
+
+#[test]
+fn walker_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "walker", "forward");
+}
+
+#[test]
+fn vehicle_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "vehicle", "forward");
+}
+
+#[test]
+fn fleet_digest_is_identical_with_the_single_threaded_job_system() {
+    for variant in ["forward", "sub_stepped"] {
+        assert_single_threaded_agrees("determinism_child", "fleet", variant);
+    }
+}
+
+#[test]
+fn ragdoll_pile_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "ragdoll_pile", "forward");
+}
+
+#[test]
+fn constraint_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "constraints", "forward");
+}
+
+#[test]
+fn soft_body_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "soft_bodies", "forward");
 }
 
 fn stacks_in_child(threads: u32, variant: &str) -> Digest {
