@@ -338,8 +338,10 @@ impl BodyMut<'_> {
 
     /// Adds a force in newtons at the centre of mass for the next step, and wakes the body.
     ///
-    /// Jolt clears accumulated forces after every step, and a body that gets a force every step
-    /// never falls asleep.
+    /// Jolt clears accumulated forces after every step; with
+    /// [`PhysicsWorld::step_with_collision_steps`](crate::PhysicsWorld::step_with_collision_steps)
+    /// a rigid body keeps the force for all collision steps of the call. A body that gets a force
+    /// every step never falls asleep.
     ///
     /// The force must be finite, and on a dynamic body the force accumulated this step including
     /// this one may give the body at most [`limits::MAX_ACCELERATION`] (`|F| / mass`); otherwise
@@ -347,10 +349,11 @@ impl BodyMut<'_> {
     /// ignore forces.
     ///
     /// On a soft body Jolt spreads the force evenly over its vertices: a vertex of inverse mass
-    /// `w` gains `F · w / N · dt` of velocity in a step, `N` being the number of vertices, and
-    /// the accumulated force may give the lightest vertex at most [`limits::MAX_ACCELERATION`]
-    /// and be at most `MAX_ACCELERATION · MAX_MASS` long (5e14 N) even when every vertex is
-    /// pinned.
+    /// `w` gains `F · w / N · dt` of velocity in a step, where `dt` is the first collision step:
+    /// Jolt clears a soft body's force after each collision step. `N` is the number of vertices,
+    /// and the accumulated force may give the lightest vertex at most
+    /// [`limits::MAX_ACCELERATION`] and be at most `MAX_ACCELERATION · MAX_MASS` long (5e14 N)
+    /// even when every vertex is pinned.
     /// Jolt adds the accumulated force to the vertices in the body's own frame, so oxijolt
     /// turns `force` into that frame with the body's current rotation; a rotation set later in
     /// the same step turns the force with the vertices.

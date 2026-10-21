@@ -312,16 +312,20 @@ world or keeps a pointer.
 ## Canonical order
 
 The world sorts the events of each step before it queues them; events from between steps keep the
-order they happened in.
+order they happened in. A `step_with_collision_steps` call is one batch: the events of all its
+collision steps are sorted once, so the order is canonical, not chronological across collision
+steps.
 
 - Contacts sort by `(body1, sub_shape1, body2, sub_shape2)` raw ids, then Added before Persisted
   before Removed, then by every payload field bit for bit: the settings, the materials, the normal,
   the penetration depth, the point count, each point's coordinates and, for Added, the collision
   estimate (none first). Only identical events compare
-  equal, and each copy is kept. One key can appear twice in a step: a `MotionQuality::LinearCast`
-  body that touches in the discrete stage and is then hit by its own continuous cast gets Added from
-  the first and Persisted from the second (`ContactConstraintManager.cpp:1421-1454`); Jolt casts
-  each pair at most once per step (`PhysicsSystem.cpp:1983-1987`). A cube rarely does this, because
+  equal, and each copy is kept. One key can appear once per collision step (Added in the one it starts,
+  Persisted in each later one), and once more within a collision step: a
+  `MotionQuality::LinearCast` body that touches in the discrete stage and is then hit by its own
+  continuous cast gets Added from the first and Persisted from the second
+  (`ContactConstraintManager.cpp:1421-1454`); Jolt casts each pair at most once per collision step
+  (`PhysicsSystem.cpp:1983-1987`). A cube rarely does this, because
   the discrete contact already slows it below the cast threshold; a tilted rod thrown at the floor
   does, because the discrete contact stops its lower end but not its centre of mass (the event
   determinism scene uses one).

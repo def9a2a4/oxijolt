@@ -263,8 +263,8 @@ impl ConstraintRef<'_, SliderConstraint> {
         unsafe { JPH_SliderConstraint_GetMaxFrictionForce(self.ptr()) }
     }
 
-    /// The impulses in N·s that kept body 2 on the slider axis in the last step, along the two
-    /// constraint axes perpendicular to it.
+    /// The impulses in N·s that kept body 2 on the slider axis in the last collision step, along
+    /// the two constraint axes perpendicular to it.
     pub fn total_lambda_position(&self) -> [f32; 2] {
         let mut value = [0.0; 2];
         // SAFETY: as in `motor_state`; `value` has room for the two values joltc writes.
@@ -273,19 +273,19 @@ impl ConstraintRef<'_, SliderConstraint> {
     }
 
     /// The impulse in N·s the motor, or the friction while the motor is off, applied in the last
-    /// step.
+    /// collision step.
     pub fn total_lambda_motor(&self) -> f32 {
         // SAFETY: as in `motor_state`.
         unsafe { JPH_SliderConstraint_GetTotalLambdaMotor(self.ptr()) }
     }
 
-    /// The impulse in N·s the limits applied in the last step.
+    /// The impulse in N·s the limits applied in the last collision step.
     pub fn total_lambda_position_limits(&self) -> f32 {
         // SAFETY: as in `motor_state`.
         unsafe { JPH_SliderConstraint_GetTotalLambdaPositionLimits(self.ptr()) }
     }
 
-    /// The angular impulse in N·m·s that kept the rotation fixed in the last step.
+    /// The angular impulse in N·m·s that kept the rotation fixed in the last collision step.
     pub fn total_lambda_rotation(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `motor_state`; `value` is a live local.

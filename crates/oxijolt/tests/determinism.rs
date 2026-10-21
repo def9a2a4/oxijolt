@@ -68,11 +68,12 @@ fn tilted_translation() -> RVec3 {
 /// Runs the stacks scene and returns one state record per step, of every body in scene order.
 /// Bodies are created in scene order (floor first), or in reverse for `"reversed"`.
 /// `"rebased"` creates them in scene order and moves the world into a tilted frame halfway
-/// through.
+/// through. `"sub_stepped"` creates them in scene order and steps with
+/// [`PhysicsWorld::MAX_COLLISION_STEPS`] collision steps.
 fn run_stacks(worker_threads: u32, variant: &str) -> Digest {
     let mut world = world(Vec3::new(0.0, -9.81, 0.0), worker_threads);
     let ids = match variant {
-        "forward" | "rebased" => build_stacks(&mut world),
+        "forward" | "rebased" | "sub_stepped" => build_stacks(&mut world),
         "reversed" => {
             let mut ids: Vec<BodyId> = stacks_scene()
                 .into_iter()
@@ -85,6 +86,11 @@ fn run_stacks(worker_threads: u32, variant: &str) -> Digest {
         }
         variant => panic!("unknown stacks variant {variant}"),
     };
+    let collision_steps = if variant == "sub_stepped" {
+        PhysicsWorld::MAX_COLLISION_STEPS
+    } else {
+        1
+    };
     let mut digest = Digest::new();
     for tick in 0..TICKS {
         if variant == "rebased" && tick == TICKS / 2 {
@@ -92,7 +98,10 @@ fn run_stacks(worker_threads: u32, variant: &str) -> Digest {
                 .rebase(&ids, tilted_rotation(), tilted_translation())
                 .unwrap();
         }
-        assert!(world.step(DT).unwrap().is_complete());
+        assert!(world
+            .step_with_collision_steps(DT, collision_steps)
+            .unwrap()
+            .is_complete());
         let record = digest.push();
         for &id in &ids {
             record_body(&world, id, &mut record.state);
@@ -904,7 +913,9 @@ fn determinism_child() {
     // Without these checks a choice that never reached the worlds, or a Rayon pool that never
     // ran a job, would pass as the native run: Jolt's update barrier runs every job itself.
     match job_choice {
-        JobChoice::Native => assert_eq!(jobs::queued(), 0, "a caller job system was used"),
+        JobChoice::Native | JobChoice::SingleThreaded => {
+            assert_eq!(jobs::queued(), 0, "a caller job system was used")
+        }
         _ => assert!(
             jobs::queued() > 0,
             "the {job_choice:?} job system was handed no job"
@@ -977,8 +988,71 @@ fn soft_body_digest_is_identical_with_caller_job_systems() {
     assert_caller_job_systems_agree("determinism_child", "soft_bodies", "forward");
 }
 
+#[test]
+fn stacks_digest_is_identical_with_the_single_threaded_job_system() {
+    for variant in ["forward", "rebased", "sub_stepped"] {
+        assert_single_threaded_agrees("determinism_child", "stacks", variant);
+    }
+}
+
+#[test]
+fn pile_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "pile", "forward");
+}
+
+#[test]
+fn chunk_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "chunk", "forward");
+}
+
+#[test]
+fn walker_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "walker", "forward");
+}
+
+#[test]
+fn vehicle_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "vehicle", "forward");
+}
+
+#[test]
+fn fleet_digest_is_identical_with_the_single_threaded_job_system() {
+    for variant in ["forward", "sub_stepped"] {
+        assert_single_threaded_agrees("determinism_child", "fleet", variant);
+    }
+}
+
+#[test]
+fn ragdoll_pile_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "ragdoll_pile", "forward");
+}
+
+#[test]
+fn constraint_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "constraints", "forward");
+}
+
+#[test]
+fn soft_body_digest_is_identical_with_the_single_threaded_job_system() {
+    assert_single_threaded_agrees("determinism_child", "soft_bodies", "forward");
+}
+
 fn stacks_in_child(threads: u32, variant: &str) -> Digest {
     digest_in_child("determinism_child", "stacks", threads, variant)
+}
+
+#[test]
+fn stacks_digest_is_identical_across_thread_counts_with_collision_steps() {
+    let one_thread = stacks_in_child(1, "sub_stepped");
+    let four_threads = stacks_in_child(4, "sub_stepped");
+    assert_eq!(one_thread.ticks.len(), TICKS);
+    assert_same(
+        "sub-stepped stacks, 1 vs 4 worker threads",
+        &one_thread,
+        &four_threads,
+    );
+    // The collision step count reached the child: sub-stepping changes the run.
+    assert!(first_divergence(&one_thread, &stacks_in_child(1, "forward")).is_some());
 }
 
 #[test]
@@ -1227,8 +1301,9 @@ const CARRIER: usize = OPEN_CARS + SLAB_CARS;
 const PARKED_CAR: usize = CARRIER + 1;
 const SEAM_CARS: [usize; 2] = [CARRIER + 2, CARRIER + 3];
 /// Ticks on which each left seam wheel must stand across the seam on each of the two seam
-/// boxes.
-const MIN_SEAM_BOX_TICKS: usize = FLEET_TICKS / 10;
+/// boxes. Which box wins depends on hits a few ulps apart, so the split differs between
+/// precisions and compilers (17 of 300 ticks on one box in a Windows double-precision build).
+const MIN_SEAM_BOX_TICKS: usize = FLEET_TICKS / 30;
 /// x of the seam between the two boxes the seam cars drive on.
 const SEAM_X: f32 = -80.0;
 /// Convex radius of the cylinder tester of the seam cars: Jolt's default fraction 0.1 of
@@ -1460,7 +1535,8 @@ impl TwinProbe<'_> {
 }
 
 /// Runs the fleet scene and records every vehicle (or, once removed, its chassis) and the slab
-/// after every tick, in key order. `"nudged"` changes car 0's steering on one tick.
+/// after every tick, in key order. `"nudged"` changes car 0's steering on one tick;
+/// `"sub_stepped"` steps with [`PhysicsWorld::MAX_COLLISION_STEPS`] collision steps.
 ///
 /// The scene couples vehicles in the ways a step listener order could show: cars sharing a
 /// dynamic slab as wheel ground, a car whose wheels stand on another vehicle's chassis, and
@@ -1469,9 +1545,10 @@ impl TwinProbe<'_> {
 /// boxes add hits on two bodies a few ulps apart. The run asserts that each coupling actually
 /// happens.
 fn run_fleet(worker_threads: u32, variant: &str) -> Digest {
-    let nudged = match variant {
-        "forward" => false,
-        "nudged" => true,
+    let (nudged, collision_steps) = match variant {
+        "forward" => (false, 1),
+        "nudged" => (true, 1),
+        "sub_stepped" => (false, PhysicsWorld::MAX_COLLISION_STEPS),
         variant => panic!("unknown fleet variant {variant}"),
     };
     let Fleet {
@@ -1509,7 +1586,13 @@ fn run_fleet(worker_threads: u32, variant: &str) -> Digest {
                 .set_driver_input(fleet_input(key, tick, nudged))
                 .unwrap();
         }
-        assert!(world.step(DT).unwrap().is_complete(), "tick {tick}");
+        assert!(
+            world
+                .step_with_collision_steps(DT, collision_steps)
+                .unwrap()
+                .is_complete(),
+            "tick {tick}"
+        );
 
         let state = &mut digest.push().state;
         for (key, car) in vehicles.iter().enumerate() {
@@ -1754,6 +1837,20 @@ fn fleet_digest_is_identical_across_thread_counts() {
         "fleet, 4 worker threads in two processes",
         &four_threads,
         &four_threads_again,
+    );
+}
+
+#[test]
+fn fleet_digest_is_identical_across_thread_counts_with_collision_steps() {
+    // 40 vehicle listeners give 2 listener jobs with one worker and 5 with four, in every
+    // collision step.
+    let one_thread = fleet_in_child(1, "sub_stepped");
+    let four_threads = fleet_in_child(4, "sub_stepped");
+    assert_eq!(one_thread.ticks.len(), FLEET_TICKS);
+    assert_same(
+        "sub-stepped fleet, 1 vs 4 worker threads",
+        &one_thread,
+        &four_threads,
     );
 }
 

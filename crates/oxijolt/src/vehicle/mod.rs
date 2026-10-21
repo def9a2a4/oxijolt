@@ -4,7 +4,7 @@
 //!
 //! # Vehicles and the step
 //! A vehicle is a constraint and a step listener of the world's Jolt system. During
-//! [`PhysicsWorld::step`] Jolt runs it before the collision step: it casts every wheel against
+//! [`PhysicsWorld::step`] Jolt runs it before each collision step: it casts every wheel against
 //! the scene, applies gravity (or the override of [`VehicleMut::set_gravity`]), then the engine,
 //! brakes and tire friction act through the constraint. No Rust code runs inside the step, and
 //! no vehicle can be read or changed during it, because the step takes `&mut PhysicsWorld`.
@@ -50,8 +50,8 @@ pub use tracked::{TrackSide, TrackState, TrackedDriverInput};
 
 /// A vehicle constraint, of which the world holds the one reference
 /// `JPH_VehicleConstraint_Create` returns. The physics system holds another while the vehicle is
-/// registered as a constraint, and a plain pointer while it is a step listener, so the world
-/// removes it from both before releasing its reference.
+/// registered as a constraint, and the vehicle's step listener a plain pointer, so the world
+/// removes both from the system before releasing its reference.
 impl JoltObject for JPH_VehicleConstraint {
     unsafe fn destroy(ptr: *mut Self) {
         // SAFETY: the owner holds one reference (trait contract) and has removed the vehicle
@@ -61,8 +61,23 @@ impl JoltObject for JPH_VehicleConstraint {
     }
 }
 
+/// The fork's step listener that runs one vehicle constraint in every collision step with its
+/// gravity override acting once per collision step. The world owns it; it is not reference
+/// counted.
+impl JoltObject for JPH_VehicleStepListener {
+    unsafe fn destroy(ptr: *mut Self) {
+        // SAFETY: the owner owns the listener (trait contract) and has removed it from the
+        // system's step listeners (`remove_vehicle`, `remove_all_vehicles`). The destructor does
+        // not touch the vehicle it points to.
+        unsafe { JPH_VehicleStepListener_Destroy(ptr) };
+    }
+}
+
 /// One vehicle of a world.
 pub(crate) struct VehicleEntry {
+    /// The system's step listener for this vehicle, in place of the constraint's own
+    /// `PhysicsStepListener` base, so that a gravity override acts once per collision step.
+    step_listener: Owned<JPH_VehicleStepListener>,
     constraint: Owned<JPH_VehicleConstraint>,
     pub(crate) body: BodyId,
     pub(crate) collision_tester: VehicleCollisionTester,
@@ -287,7 +302,14 @@ impl PhysicsWorld {
         })
         .unwrap_or_else(|| unreachable!("`check_chassis` found the body and `&mut self` keeps it"))
         .unwrap_or_else(|| unreachable!("joltc `new`s the constraint"));
+        // SAFETY: the constraint is live; the listener keeps a pointer to it, and the entry
+        // holds both, removing the listener from the system before either is released. The
+        // handle takes over the listener the extension `new`s.
+        let step_listener =
+            unsafe { Owned::from_raw(JPH_VehicleStepListener_Create(constraint.as_ptr())) }
+                .unwrap_or_else(|| unreachable!("the extension `new`s the listener"));
         let mut entry = VehicleEntry {
+            step_listener,
             constraint,
             body,
             collision_tester: built.collision_tester,
@@ -297,19 +319,19 @@ impl PhysicsWorld {
         };
         install_tester(&mut entry, built.collision_tester);
         self.note_structure_change();
-        // SAFETY: the system and the constraint are live, the system is borrowed mutably and no
-        // step runs. The system takes its own reference as a constraint and keeps a pointer as a
-        // step listener; `remove_vehicle` and `remove_all_vehicles` take the vehicle out of both
-        // before the world releases its reference. The tester is set, as the first step needs.
+        // SAFETY: the system, the constraint and its step listener are live, the system is
+        // borrowed mutably and no step runs. The system takes its own reference to the
+        // constraint and keeps a pointer to the listener; `remove_vehicle` and
+        // `remove_all_vehicles` take both out before the world releases them. The tester is
+        // set, as the first step needs.
         unsafe {
-            let constraint = entry.constraint.as_ptr();
             JPH_PhysicsSystem_AddConstraint(
                 self.system.as_ptr(),
-                JPH_VehicleConstraint_AsConstraint(constraint),
+                JPH_VehicleConstraint_AsConstraint(entry.constraint.as_ptr()),
             );
             JPH_PhysicsSystem_AddStepListener(
                 self.system.as_ptr(),
-                JPH_VehicleConstraint_AsPhysicsStepListener(constraint),
+                JPH_VehicleStepListener_AsPhysicsStepListener(entry.step_listener.as_ptr()),
             );
         }
         self.vehicles.insert(raw, entry);
@@ -351,20 +373,19 @@ impl PhysicsWorld {
         Ok(())
     }
 
-    /// Takes the vehicle out of the system's step listeners and constraints, then releases the
-    /// world's reference.
+    /// Takes the vehicle's step listener and constraint out of the system, then releases the
+    /// listener and the world's reference to the constraint.
     fn unregister_vehicle(&mut self, entry: VehicleEntry) {
-        // SAFETY: the system and the constraint are live, the system is borrowed mutably and no
-        // step runs; the vehicle was registered in both lists by `create_wheeled_vehicle`.
+        // SAFETY: the system, the constraint and its listener are live, the system is borrowed
+        // mutably and no step runs; `attach_vehicle` registered both.
         unsafe {
-            let constraint = entry.constraint.as_ptr();
             JPH_PhysicsSystem_RemoveStepListener(
                 self.system.as_ptr(),
-                JPH_VehicleConstraint_AsPhysicsStepListener(constraint),
+                JPH_VehicleStepListener_AsPhysicsStepListener(entry.step_listener.as_ptr()),
             );
             JPH_PhysicsSystem_RemoveConstraint(
                 self.system.as_ptr(),
-                JPH_VehicleConstraint_AsConstraint(constraint),
+                JPH_VehicleConstraint_AsConstraint(entry.constraint.as_ptr()),
             );
         }
         drop(entry);

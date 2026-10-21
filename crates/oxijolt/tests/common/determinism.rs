@@ -321,3 +321,18 @@ pub fn assert_caller_job_systems_agree(child_test: &str, scenario: &str, variant
         &inline,
     );
 }
+
+/// Runs `scenario` of the ignored child test `child_test` with Jolt's thread pool of 1 worker
+/// and with Jolt's single-threaded job system, each in its own child, and asserts that both
+/// record the same.
+pub fn assert_single_threaded_agrees(child_test: &str, scenario: &str, variant: &str) {
+    let run = |jobs| digest_in_child_with_jobs(child_test, scenario, 1, variant, jobs);
+    let native = run(JobChoice::Native);
+    let single_threaded = run(JobChoice::SingleThreaded);
+    assert!(!native.ticks.is_empty());
+    assert_same(
+        &format!("{scenario} {variant}, 1 worker vs single-threaded"),
+        &native,
+        &single_threaded,
+    );
+}

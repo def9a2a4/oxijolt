@@ -419,16 +419,21 @@ impl fmt::Display for QueryError {
 
 impl std::error::Error for QueryError {}
 
-/// Why [`PhysicsWorld::step`](crate::PhysicsWorld::step) rejected the call. The world did not
-/// advance. A step that ran but dropped work is reported in its
-/// [`StepReport`](crate::StepReport) instead.
+/// Why [`PhysicsWorld::step`](crate::PhysicsWorld::step) or
+/// [`PhysicsWorld::step_with_collision_steps`](crate::PhysicsWorld::step_with_collision_steps)
+/// rejected the call. The world did not advance. A step that ran but dropped work is reported in
+/// its [`StepReport`](crate::StepReport) instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StepError {
-    /// The time step is not finite, below
+    /// The total time step is not finite, below
     /// [`PhysicsWorld::MIN_DELTA_TIME`](crate::PhysicsWorld::MIN_DELTA_TIME) or above
-    /// [`PhysicsWorld::MAX_DELTA_TIME`](crate::PhysicsWorld::MAX_DELTA_TIME).
+    /// [`PhysicsWorld::MAX_DELTA_TIME`](crate::PhysicsWorld::MAX_DELTA_TIME), or one collision
+    /// step (`delta_time / collision_steps`, divided in `f32` as Jolt does) is shorter than
+    /// `MIN_DELTA_TIME`.
     InvalidDeltaTime,
+    /// A value other than the time step is out of range; the payload names it.
+    InvalidValue(&'static str),
 }
 
 impl fmt::Display for StepError {
@@ -436,10 +441,12 @@ impl fmt::Display for StepError {
         match self {
             Self::InvalidDeltaTime => write!(
                 f,
-                "the time step must be finite and between {} and {} s",
+                "the time step must be finite and between {} and {} s, and each collision step at least {} s",
                 crate::PhysicsWorld::MIN_DELTA_TIME,
-                crate::PhysicsWorld::MAX_DELTA_TIME
+                crate::PhysicsWorld::MAX_DELTA_TIME,
+                crate::PhysicsWorld::MIN_DELTA_TIME
             ),
+            Self::InvalidValue(what) => write!(f, "invalid step value: {what}"),
         }
     }
 }

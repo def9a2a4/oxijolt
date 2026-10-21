@@ -124,7 +124,7 @@ impl ConstraintRef<'_, HingeConstraint> {
         unsafe { JPH_HingeConstraint_GetMaxFrictionTorque(self.ptr()) }
     }
 
-    /// The impulse in N·s that kept the hinge points together in the last step.
+    /// The impulse in N·s that kept the hinge points together in the last collision step.
     pub fn total_lambda_position(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `motor_state`; `value` is a live local.
@@ -133,7 +133,7 @@ impl ConstraintRef<'_, HingeConstraint> {
     }
 
     /// The angular impulses in N·m·s that kept body 2 turning only about the hinge axis in the
-    /// last step, about the two constraint axes perpendicular to it.
+    /// last collision step, about the two constraint axes perpendicular to it.
     pub fn total_lambda_rotation(&self) -> [f32; 2] {
         let mut value = [0.0; 2];
         // SAFETY: as in `motor_state`; `value` has room for the two values joltc writes.
@@ -142,13 +142,13 @@ impl ConstraintRef<'_, HingeConstraint> {
     }
 
     /// The angular impulse in N·m·s the motor, or the friction while the motor is off, applied
-    /// in the last step.
+    /// in the last collision step.
     pub fn total_lambda_motor(&self) -> f32 {
         // SAFETY: as in `motor_state`.
         unsafe { JPH_HingeConstraint_GetTotalLambdaMotor(self.ptr()) }
     }
 
-    /// The angular impulse in N·m·s the limits applied in the last step.
+    /// The angular impulse in N·m·s the limits applied in the last collision step.
     pub fn total_lambda_rotation_limits(&self) -> f32 {
         // SAFETY: as in `motor_state`.
         unsafe { JPH_HingeConstraint_GetTotalLambdaRotationLimits(self.ptr()) }
@@ -401,7 +401,7 @@ impl ConstraintRef<'_, ConeConstraint> {
         cos.clamp(-1.0, 1.0).acos()
     }
 
-    /// The impulse in N·s that kept the points together in the last step.
+    /// The impulse in N·s that kept the points together in the last collision step.
     pub fn total_lambda_position(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `half_cone_angle`; `value` is a live local.
@@ -409,7 +409,7 @@ impl ConstraintRef<'_, ConeConstraint> {
         Vec3::from_jph(value)
     }
 
-    /// The angular impulse in N·m·s the cone applied in the last step.
+    /// The angular impulse in N·m·s the cone applied in the last collision step.
     pub fn total_lambda_rotation(&self) -> f32 {
         // SAFETY: as in `half_cone_angle`.
         unsafe { JPH_ConeConstraint_GetTotalLambdaRotation(self.ptr()) }
@@ -546,7 +546,7 @@ impl ConstraintRef<'_, SwingTwistConstraint> {
         unsafe { JPH_SwingTwistConstraint_GetMaxFrictionTorque(self.ptr()) }
     }
 
-    /// The impulse in N·s that kept the points together in the last step.
+    /// The impulse in N·s that kept the points together in the last collision step.
     pub fn total_lambda_position(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `target_orientation_cs`.
@@ -555,9 +555,9 @@ impl ConstraintRef<'_, SwingTwistConstraint> {
     }
 
     /// The angular impulses in N·m·s the twist, swing Y and swing Z limit parts applied in the
-    /// last step, each about an axis Jolt picks for that step. A limit with a range only pushes
-    /// back and turns its axis round at its minimum, so a twist limit reads zero or less at either
-    /// end; a locked axis reads either sign. With both swing axes limited Jolt solves one swing
+    /// last collision step, each about an axis Jolt picks for that step. A limit with a range
+    /// only pushes back and turns its axis round at its minimum, so a twist limit reads zero or
+    /// less at either end; a locked axis reads either sign. With both swing axes limited Jolt solves one swing
     /// limit, about the axis from the nearest allowed swing to the current one, in the swing Y
     /// part, and swing Z reads 0. Compare the length of the three with a torque limit, not one
     /// component (see [docs/constraints.md#breakable-constraints]).
@@ -575,7 +575,7 @@ impl ConstraintRef<'_, SwingTwistConstraint> {
     }
 
     /// The angular impulses in N·m·s the motors, or the friction while they are off, applied in
-    /// the last step, per constraint axis (twist, swing Y, swing Z).
+    /// the last collision step, per constraint axis (twist, swing Y, swing Z).
     pub fn total_lambda_motor(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `target_orientation_cs`.
@@ -765,8 +765,8 @@ impl ConstraintRef<'_, SixDofConstraint> {
         Quat::from_jph(value)
     }
 
-    /// The impulse in N·s that held the translation in the last step: a world-space vector while
-    /// all three translation axes are fixed and none has a soft limit spring
+    /// The impulse in N·s that held the translation in the last collision step: a world-space
+    /// vector while all three translation axes are fixed and none has a soft limit spring
     /// ([`limits_spring`](crate::SixDofConstraintSettings::limits_spring)),
     /// otherwise the three translation axis parts (limits) in constraint-axis order.
     pub fn total_lambda_position(&self) -> Vec3 {
@@ -776,9 +776,9 @@ impl ConstraintRef<'_, SixDofConstraint> {
         Vec3::from_jph(value)
     }
 
-    /// The angular impulse in N·m·s that held the rotation in the last step: a world-space vector
-    /// while all three rotation axes are fixed, otherwise the twist, swing Y and swing Z limit
-    /// parts, about axes Jolt picks each step as for a swing-twist constraint's
+    /// The angular impulse in N·m·s that held the rotation in the last collision step: a
+    /// world-space vector while all three rotation axes are fixed, otherwise the twist, swing Y
+    /// and swing Z limit parts, about axes Jolt picks each step as for a swing-twist constraint's
     /// [`total_lambda_limits`](ConstraintRef::total_lambda_limits).
     pub fn total_lambda_rotation(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
@@ -788,7 +788,7 @@ impl ConstraintRef<'_, SixDofConstraint> {
     }
 
     /// The impulses in N·s the translation motors, or the friction while they are off, applied
-    /// in the last step, per constraint axis.
+    /// in the last collision step, per constraint axis.
     pub fn total_lambda_motor_translation(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `rotation_in_constraint_space`.
@@ -797,7 +797,7 @@ impl ConstraintRef<'_, SixDofConstraint> {
     }
 
     /// The angular impulses in N·m·s the rotation motors, or the friction while they are off,
-    /// applied in the last step, per constraint axis.
+    /// applied in the last collision step, per constraint axis.
     pub fn total_lambda_motor_rotation(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `rotation_in_constraint_space`.

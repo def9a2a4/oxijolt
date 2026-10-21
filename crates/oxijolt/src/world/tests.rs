@@ -29,6 +29,28 @@ fn any_full_buffer_makes_a_report_incomplete() {
     }
 }
 
+#[test]
+fn single_threaded_is_chosen_last_wins_and_has_concurrency_one() {
+    let settings = WorldSettings::default().worker_threads(2).single_threaded();
+    assert!(
+        matches!(settings.jobs, JobSystemChoice::SingleThreaded),
+        "{settings:?}"
+    );
+    assert_eq!(settings.jobs.max_concurrency(), Ok(1));
+
+    let settings = WorldSettings::default().single_threaded().worker_threads(2);
+    assert!(
+        matches!(settings.jobs, JobSystemChoice::ThreadPool(2)),
+        "{settings:?}"
+    );
+
+    let world = PhysicsWorld::new(WorldSettings::default().single_threaded()).unwrap();
+    assert!(matches!(
+        world.job_system,
+        WorldJobSystem::SingleThreaded(_)
+    ));
+}
+
 fn moving_state() -> BodyFrameState {
     BodyFrameState {
         position: RVec3::new(1.0, 0.0, 0.0),

@@ -1,6 +1,7 @@
 //! Smoke tests for the vehicle constraint through the raw API: a box chassis with one driven
 //! wheel, registered as a constraint (through the fork's `JPH_VehicleConstraint_AsConstraint`)
-//! and as a step listener, steps on a floor and is torn down cleanly; and the fork's checked
+//! and as a step listener, steps on a floor and is torn down cleanly; the fork's vehicle step
+//! listener, which applies a gravity override once per collision step; and the fork's checked
 //! motorcycle target lean accessors.
 
 mod framework;
@@ -272,6 +273,118 @@ fn other_vehicle_kinds(world: &TestWorld) -> [(*mut JPH_VehicleConstraint, JPH_B
         tracked_controller.cast(),
     );
     [(wheeled, wheeled_chassis), (tracked, tracked_chassis)]
+}
+
+/// Which step listener runs a vehicle.
+#[derive(Clone, Copy)]
+enum VehicleListener {
+    /// The constraint's own `PhysicsStepListener` base.
+    Jolt,
+    /// The fork's `JPH_VehicleStepListener`.
+    Fork,
+}
+
+/// Lets a one-wheel vehicle with its gravity override at the world's gravity fall freely next to a
+/// plain box of the same shape for one update of `collision_steps` collision steps, run by
+/// `listener`; returns the vertical velocities of the chassis and the box.
+fn fall_with_gravity_override(listener: VehicleListener, collision_steps: i32) -> [f32; 2] {
+    let world = TestWorld::new(1);
+    let size = vec3(0.2, 0.3, 0.4);
+    let chassis = create_box(
+        world.body_interface(),
+        size,
+        rvec3(0.0, 10.0, 0.0),
+        JPH_MotionType_Dynamic,
+        OL_MOVING,
+        JPH_Activation_Activate,
+    );
+    let free_box = create_box(
+        world.body_interface(),
+        size,
+        rvec3(10.0, 10.0, 0.0),
+        JPH_MotionType_Dynamic,
+        OL_MOVING,
+        JPH_Activation_Activate,
+    );
+    let constraint = create_constraint(
+        &world,
+        chassis,
+        &mut [wheel_settings().cast()],
+        controller_settings().cast(),
+    );
+    let mut gravity = vec3(0.0, 0.0, 0.0);
+    let up = vec3(0.0, 1.0, 0.0);
+    // SAFETY: the system and the constraint are live and no step runs. The tester's reference is
+    // ours until the constraint takes its own. The fork's listener is created for the live
+    // constraint, which outlives its registration; either listener is registered with the tester
+    // set and removed below before the listener and the constraint are released.
+    let fork_listener = unsafe {
+        JPH_PhysicsSystem_GetGravity(world.system(), &mut gravity);
+        JPH_VehicleConstraint_OverrideGravity(constraint, &gravity);
+        let tester = JPH_VehicleCollisionTesterRay_Create(OL_MOVING, &up, 80.0_f32.to_radians());
+        assert!(!tester.is_null());
+        JPH_VehicleConstraint_SetVehicleCollisionTester(constraint, tester.cast());
+        JPH_VehicleCollisionTester_Destroy(tester.cast());
+        JPH_PhysicsSystem_AddConstraint(
+            world.system(),
+            JPH_VehicleConstraint_AsConstraint(constraint),
+        );
+        let fork_listener = JPH_VehicleStepListener_Create(constraint);
+        assert!(!fork_listener.is_null());
+        fork_listener
+    };
+    // SAFETY: both pointers are live; the cast picks the step listener base of each.
+    let step_listener = unsafe {
+        match listener {
+            VehicleListener::Jolt => JPH_VehicleConstraint_AsPhysicsStepListener(constraint),
+            VehicleListener::Fork => JPH_VehicleStepListener_AsPhysicsStepListener(fork_listener),
+        }
+    };
+    // SAFETY: the listener is live and stays registered until it is removed below.
+    unsafe { JPH_PhysicsSystem_AddStepListener(world.system(), step_listener) };
+    assert_eq!(gravity.y, -9.81);
+
+    world.step_with_collision_steps(DT, collision_steps);
+
+    let mut chassis_velocity = vec3(0.0, 0.0, 0.0);
+    let mut box_velocity = vec3(0.0, 0.0, 0.0);
+    // SAFETY: the ids name live bodies and the outputs are live locals. The listener is removed
+    // before it is destroyed, the vehicle from the constraints before our reference, the last
+    // one, is released, and both before the chassis goes.
+    unsafe {
+        JPH_BodyInterface_GetLinearVelocity(world.body_interface(), chassis, &mut chassis_velocity);
+        JPH_BodyInterface_GetLinearVelocity(world.body_interface(), free_box, &mut box_velocity);
+        JPH_PhysicsSystem_RemoveStepListener(world.system(), step_listener);
+        JPH_VehicleStepListener_Destroy(fork_listener);
+        JPH_PhysicsSystem_RemoveConstraint(
+            world.system(),
+            JPH_VehicleConstraint_AsConstraint(constraint),
+        );
+        JPH_Constraint_Destroy(JPH_VehicleConstraint_AsConstraint(constraint));
+        JPH_BodyInterface_RemoveAndDestroyBody(world.body_interface(), chassis);
+        JPH_BodyInterface_RemoveAndDestroyBody(world.body_interface(), free_box);
+    }
+    [chassis_velocity.y, box_velocity.y]
+}
+
+#[test]
+fn vehicle_step_listener_applies_the_gravity_override_once_per_collision_step() {
+    for collision_steps in 1..=4 {
+        let [chassis, free_box] =
+            fall_with_gravity_override(VehicleListener::Fork, collision_steps);
+        assert!(free_box < -0.1, "{free_box}");
+        assert!(
+            (chassis - free_box).abs() <= 1e-6 * free_box.abs(),
+            "{collision_steps} collision steps: chassis {chassis}, box {free_box}"
+        );
+    }
+    // Jolt's own listener adds the override again in every collision step: collision step k of
+    // four gets k times it, (1 + 2 + 3 + 4) / 4 = 2.5 times the box's velocity in all.
+    let [chassis, free_box] = fall_with_gravity_override(VehicleListener::Jolt, 4);
+    assert!(
+        (chassis / free_box - 2.5).abs() < 1e-3,
+        "chassis {chassis}, box {free_box}"
+    );
 }
 
 /// Reads a controller's target lean through the extension, starting from a sentinel.

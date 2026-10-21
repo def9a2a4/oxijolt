@@ -18,7 +18,8 @@ system, on the scenes listed below. They do not check every thread count or ever
 ## The call history is state
 
 The order of body creation and removal decides each `BodyId`'s index and sequence number, so it is
-part of the state. So are rebases, `optimize_broad_phase`, forces and velocity writes.
+part of the state. So are rebases, `optimize_broad_phase`, forces and velocity writes, and the
+collision step count of each call (`step_with_collision_steps(dt, 4)` is not four `step(dt / 4)`).
 
 - **Characters.** Each world numbers its characters from 1 in creation order. Jolt's default
   character id comes from a process-wide counter and orders contacts between characters, so the
@@ -64,10 +65,12 @@ do not compare machines.
 
 `cargo test -p oxijolt --test determinism` runs each scene in child processes, one with 1 worker and
 one with 4, and requires their per-tick records to match byte for byte. Each scene also runs with a
-Rayon pool of 4 threads and with an inline job system, which must record what Jolt's pool with 1
-worker records.
+Rayon pool of 4 threads, with an inline job system and with Jolt's single-threaded job system
+(`WorldSettings::single_threaded`), which must record what Jolt's pool with 1 worker records.
 
-- **Stacks**: cubes topple on a floor for 120 ticks, also across a rebase.
+- **Stacks**: cubes topple on a floor for 120 ticks, also across a rebase, and stepped with
+  `PhysicsWorld::MAX_COLLISION_STEPS` collision steps per call (1 and 4 workers, and
+  single-threaded).
 - **Chunk**: a static compound chunk on a heightfield terrain and three items the caller pulls
   towards a planet centre, created, coming to rest and removed under the game's item rules, with a
   tilted rebase in the middle; ticks 0 to 1000. The same bodies created in another order must fail
@@ -75,7 +78,8 @@ worker records.
 - **Walker**: the game's reference controller (`tests/common/walker.rs`) for 600 ticks, with items
   dropped along its path.
 - **Vehicle**: a car driving the acceptance route over terrain.
-- **Fleet**: 40 vehicles, whose digest must also change when one input changes.
+- **Fleet**: 40 vehicles, whose digest must also change when one input changes; also stepped with
+  `MAX_COLLISION_STEPS` collision steps per call.
 - **Ragdoll pile**: 16 humanoid ragdolls dropped into a pit, touching from the first tick.
 - **Constraints**: a hinge chain, a motor-driven slider, a gear pair, a pulley and a path; one
   constraint is removed and re-created halfway.
@@ -83,8 +87,9 @@ worker records.
   on a box; one corner is unpinned and the other moved halfway.
 
 Other gates of the same kind:
-- `tests/event_determinism.rs` compares the serialized events of every step for 1 and 4 workers and
-  for caller job systems, and checks that a scene stepped with every event on and a no-op contact
+- `tests/event_determinism.rs` compares the serialized events of every step for 1 and 4 workers,
+  for caller job systems and for the single-threaded job system, also with `MAX_COLLISION_STEPS`
+  collision steps per call, and checks that a scene stepped with every event on and a no-op contact
   listener simulates bit for bit like the same scene with nothing installed.
 - `tests/state.rs` replays a rollback in two processes with 1 and 4 workers
   (`rollback_replay_is_identical_across_processes`).

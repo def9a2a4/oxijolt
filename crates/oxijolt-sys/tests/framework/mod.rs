@@ -179,9 +179,25 @@ impl TestWorld {
 
     /// Advances the simulation by `dt` seconds with one collision step.
     pub fn step(&self, dt: f32) {
+        self.step_with_collision_steps(dt, 1);
+    }
+
+    /// Advances the simulation by `dt` seconds in `collision_steps` collision steps of
+    /// `dt / collision_steps` each, inside one update.
+    pub fn step_with_collision_steps(&self, dt: f32, collision_steps: i32) {
+        assert!(
+            collision_steps > 0,
+            "Jolt needs at least one collision step"
+        );
         // SAFETY: all three pointers come from `assemble` and live until `drop`.
         let result = unsafe {
-            JPH_PhysicsSystem_Update2(self.system, dt, 1, self.temp_allocator, self.job_system)
+            JPH_PhysicsSystem_Update2(
+                self.system,
+                dt,
+                collision_steps,
+                self.temp_allocator,
+                self.job_system,
+            )
         };
         assert_eq!(result, JPH_PhysicsUpdateError_None);
     }

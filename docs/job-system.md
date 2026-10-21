@@ -1,9 +1,13 @@
 # Running Jolt's jobs on your own thread pool
 
-A world runs the jobs of a step on Jolt's own thread pool by default
-(`WorldSettings::worker_threads`, one worker unless set). A game that already has a pool, such as
-Rayon or its own task system, can hand those jobs to it instead through the `JobSystem` trait; Jolt
-then starts no threads for that world.
+A world runs the jobs of a step on one of three job systems, chosen in `WorldSettings`; the
+setting called last decides:
+
+- Jolt's own thread pool, the default (`WorldSettings::worker_threads`, one worker unless set).
+- Jolt's single-threaded job system (`WorldSettings::single_threaded`): every job runs on the
+  thread that calls `step`, with concurrency 1, and Jolt starts no threads.
+- The caller's pool, such as Rayon or a game's own task system, through the `JobSystem` trait
+  (`WorldSettings::job_system`); Jolt then starts no threads for that world either.
 
 ## An adapter
 
@@ -82,8 +86,8 @@ caller's job system again.
 
 Which threads ran the jobs is not part of Jolt's state, so results do not depend on the pool. The
 tests check this: the determinism scenes ([determinism.md](determinism.md)) run with a Rayon pool of
-4 threads and with an inline job system (one that calls `job.run()` inside `queue_job`) and must
-record what Jolt's pool with 1 worker records. `tests/job_system.rs` also compares a Rayon pool of
+4 threads, with an inline job system (one that calls `job.run()` inside `queue_job`) and with the
+single-threaded job system, and must record what Jolt's pool with 1 worker records. `tests/job_system.rs` also compares a Rayon pool of
 3 threads with Jolt's pool on stacks of cubes, and the inline job system on those stacks and on a
 pile of ragdolls. Side effects of the caller's own code in `queue_job` are the caller's to keep
 deterministic.

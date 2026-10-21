@@ -1,6 +1,7 @@
-//! Worlds that run Jolt's jobs on a caller job system: results equal to Jolt's thread pool,
-//! jobs run inside `queue_job`, re-entrant steps, jobs that outlive their world, panics in the
-//! caller's `queue_job`, the concurrency bound and the choice between the two job systems.
+//! Worlds that run Jolt's jobs on a caller job system or Jolt's single-threaded job system:
+//! results equal to Jolt's thread pool, jobs run inside `queue_job`, re-entrant steps, jobs that
+//! outlive their world, panics in the caller's `queue_job`, the concurrency bound, Jolt's job
+//! pool at the largest collision step count and the choice between the job systems.
 
 mod common;
 
@@ -445,6 +446,128 @@ fn the_last_of_job_system_and_worker_threads_wins() {
     );
     stacks_digest(settings);
     assert!(jobs.queued() > 0);
+}
+
+fn single_threaded() -> WorldSettings {
+    WorldSettings::default().single_threaded()
+}
+
+#[test]
+fn single_threaded_matches_the_native_pool() {
+    assert_eq!(stacks_digest(single_threaded()), stacks_digest(native()));
+    assert_eq!(
+        ragdoll_pile_digest(single_threaded()),
+        ragdoll_pile_digest(native())
+    );
+}
+
+#[test]
+fn the_last_of_three_job_system_choices_wins() {
+    let jobs = Arc::new(Counting::new(InlineJobs { concurrency: 3 }));
+    let settings = WorldSettings::default()
+        .job_system(jobs.clone())
+        .single_threaded();
+    assert!(
+        format!("{settings:?}").contains("SingleThreaded"),
+        "{settings:?}"
+    );
+    stacks_digest(settings);
+    assert_eq!(jobs.queued(), 0);
+
+    let settings = single_threaded().job_system(jobs.clone());
+    assert!(
+        format!("{settings:?}").contains("Caller(JobSystem)"),
+        "{settings:?}"
+    );
+    stacks_digest(settings);
+    assert!(jobs.queued() > 0);
+}
+
+#[test]
+fn a_single_threaded_world_steps_on_another_thread() {
+    const MOVED_TICKS: usize = 60;
+    let mut world = PhysicsWorld::new(single_threaded()).unwrap();
+    let ids = build_stacks(&mut world);
+    let moved = thread::spawn(move || run_digest(&mut world, &ids, MOVED_TICKS))
+        .join()
+        .unwrap();
+
+    let mut world = PhysicsWorld::new(single_threaded()).unwrap();
+    let ids = build_stacks(&mut world);
+    assert_eq!(moved, run_digest(&mut world, &ids, MOVED_TICKS));
+}
+
+#[test]
+fn worlds_with_different_native_job_systems_step_in_parallel() {
+    let (pool, single) = with_timeout(TIMEOUT_SECS, || {
+        thread::scope(|scope| {
+            let pool = scope.spawn(|| stacks_digest(native()));
+            let single = scope.spawn(|| stacks_digest(single_threaded()));
+            (pool.join().unwrap(), single.join().unwrap())
+        })
+    });
+    assert_eq!(pool, stacks_digest(native()));
+    assert_eq!(single, stacks_digest(single_threaded()));
+}
+
+/// A floor and 2048 awake unit cubes in a 16 x 16 grid of columns of 8, stepped 30 times with
+/// [`PhysicsWorld::MAX_COLLISION_STEPS`] collision steps on `jobs`: the largest number of
+/// FindCollisions respawns one update queued.
+fn largest_respawn_count(jobs: Arc<Counting<impl JobSystem + 'static>>) -> usize {
+    let collision_steps = PhysicsWorld::MAX_COLLISION_STEPS as usize;
+    let mut world = PhysicsWorld::new(WorldSettings::default().job_system(jobs.clone())).unwrap();
+    add_floor(&mut world);
+    let shape = Shape::new_box(Vec3::new(0.5, 0.5, 0.5)).unwrap();
+    for column in 0..256 {
+        let (x, z) = ((column % 16) as Real * 1.1, (column / 16) as Real * 1.1);
+        for layer in 0..8 {
+            let settings = BodySettings::new_dynamic()
+                .position(RVec3::new(x, 0.5 + 1.05 * layer as Real, z))
+                .motion_quality(MotionQuality::Discrete)
+                .allow_sleeping(false);
+            world.create_body(&shape, &settings).unwrap();
+        }
+    }
+    // Jobs per collision step of this scene at concurrency 32: 11 single jobs,
+    // DetermineActiveConstraints 1, ApplyGravity 30, FindCollisions 32, SetupVelocityConstraints
+    // 1, SolveVelocity 32, IntegrateVelocity 32, SolvePosition 32; the last collision step has no
+    // StartNextStep. Every job is queued once (docs/limits.md#collision-steps).
+    let static_jobs = 171 * collision_steps - 1;
+    let mut largest = 0;
+    for _ in 0..30 {
+        let before = jobs.queued();
+        let report = world
+            .step_with_collision_steps(DT, PhysicsWorld::MAX_COLLISION_STEPS)
+            .unwrap();
+        assert!(report.is_complete());
+        let queued = jobs.queued() - before;
+        assert!(
+            queued >= static_jobs,
+            "{queued} jobs, {static_jobs} expected at least"
+        );
+        largest = largest.max(queued - static_jobs);
+    }
+    largest
+}
+
+#[test]
+fn a_saturated_update_at_max_collision_steps_fits_jolts_job_pool() {
+    // Jolt's job pool and barrier ring hold 2048 jobs. An update of `n` collision steps creates at
+    // most `360 * n - 1` jobs besides FindCollisions respawns, and the respawns may take twice
+    // their count in the worst case (docs/limits.md#collision-steps).
+    let collision_steps = PhysicsWorld::MAX_COLLISION_STEPS as usize;
+    let budget = (2048 - (360 * collision_steps - 1)) / 2;
+    let inline = with_timeout(TIMEOUT_SECS, || {
+        largest_respawn_count(Arc::new(Counting::new(InlineJobs { concurrency: 32 })))
+    });
+    let rayon = with_timeout(TIMEOUT_SECS, || {
+        largest_respawn_count(Arc::new(Counting::new(RayonJobs::new(31))))
+    });
+    assert!(
+        inline <= budget,
+        "inline: {inline} respawns, budget {budget}"
+    );
+    assert!(rayon <= budget, "rayon: {rayon} respawns, budget {budget}");
 }
 
 #[test]

@@ -1,8 +1,8 @@
 //! Constraint impulse readouts: every `total_lambda*` getter against the load its constraint
 //! holds, worked out from mass, lever arm and step length, with signs in frames where Jolt's
 //! constraint axes are known; channels that carry no load read zero. Also that the readout is
-//! the impulse of the whole step, and that disabled and sleeping constraints keep their last
-//! values.
+//! the impulse of the whole step, of the last collision step when a step has several, and that
+//! disabled and sleeping constraints keep their last values.
 
 mod common;
 
@@ -204,6 +204,26 @@ fn the_readout_is_the_impulse_of_the_whole_step() {
     assert_close(at_60_hz, weight(MASS, DT), "60 Hz");
     assert_close(at_30_hz, 2.0 * at_60_hz, "30 Hz");
     assert_close(switched, at_30_hz, "60 Hz, then 30 Hz");
+}
+
+#[test]
+fn a_weld_reads_the_weight_of_its_last_collision_step() {
+    let steps = PhysicsWorld::MAX_COLLISION_STEPS;
+    let weld = FixedConstraintSettings::new(at([0.0, HALF, 0.0]), X, Y);
+    let (mut world, _, id) = rig(GRAVITY, CENTRE, &weld);
+    for _ in 0..SETTLE {
+        assert!(world
+            .step_with_collision_steps(DT, steps)
+            .unwrap()
+            .is_complete());
+    }
+    let readout = world.constraint(id).unwrap().total_lambda_position().y;
+    assert_close(
+        readout,
+        weight(MASS, DT / steps as f32),
+        "last collision step",
+    );
+    assert!(!close(readout, weight(MASS, DT), REL), "{readout}");
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! The physics world: a Jolt physics system with its own job system and temp allocator. The job
-//! system is Jolt's thread pool or a native object that hands jobs to the caller's
-//! [`JobSystem`].
+//! system is Jolt's thread pool, Jolt's single-threaded job system, or a native one that hands the
+//! jobs to the caller's [`JobSystem`].
 //!
 //! joltc keeps a global map of physics systems that creating and destroying a system writes
 //! without synchronisation, so both run under one process-wide lock here. Stepping uses the
@@ -66,6 +66,8 @@ fn lock_joltc_globals() -> MutexGuard<'static, ()> {
 enum JobSystemChoice {
     /// Jolt's thread pool with this many worker threads.
     ThreadPool(u32),
+    /// Jolt's single-threaded job system.
+    SingleThreaded,
     /// The caller's job system.
     Caller(Arc<dyn JobSystem>),
 }
@@ -74,6 +76,7 @@ impl fmt::Debug for JobSystemChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ThreadPool(workers) => f.debug_tuple("ThreadPool").field(workers).finish(),
+            Self::SingleThreaded => f.write_str("SingleThreaded"),
             Self::Caller(_) => f.write_str("Caller(JobSystem)"),
         }
     }
@@ -85,6 +88,7 @@ impl JobSystemChoice {
     fn max_concurrency(&self) -> Result<u32, WorldError> {
         match self {
             Self::ThreadPool(workers) => Ok(workers + 1),
+            Self::SingleThreaded => Ok(1),
             Self::Caller(job_system) => {
                 let value = job_system.max_concurrency();
                 if (1..=WorldSettings::MAX_CONCURRENCY).contains(&value) {
@@ -169,22 +173,30 @@ impl WorldSettings {
     pub const MAX_SOLVER_STEPS: u32 = 255;
 
     /// Maximum number of bodies in the world, between 1 and [`MAX_BODIES`](Self::MAX_BODIES).
-    /// Default 10240.
+    /// Default 10240. Raising it does not raise [`max_body_pairs`](Self::max_body_pairs) or
+    /// [`max_contact_constraints`](Self::max_contact_constraints): size those separately for the
+    /// contacts the scene is expected to have.
     #[must_use]
     pub fn max_bodies(mut self, value: u32) -> Self {
         self.max_bodies = value;
         self
     }
 
-    /// Maximum number of body pairs the broad phase can report per step. Default 65536.
+    /// Maximum number of body pairs whose bounding boxes overlap that the broad phase can hand to
+    /// the narrow phase per collision step, at least 1. Default 65536. It does not grow with
+    /// [`max_bodies`](Self::max_bodies); size it for the expected overlapping pairs. A full buffer
+    /// sets [`StepReport::body_pair_cache_full`].
     #[must_use]
     pub fn max_body_pairs(mut self, value: u32) -> Self {
         self.max_body_pairs = value;
         self
     }
 
-    /// Maximum number of contact constraints per step, at least 1 and at most
-    /// [`WorldSettings::MAX_CONTACT_CONSTRAINTS`]. Default 10240.
+    /// Maximum number of contact constraints per collision step, at least 1 and at most
+    /// [`MAX_CONTACT_CONSTRAINTS`](Self::MAX_CONTACT_CONSTRAINTS). Default 10240. Jolt makes one
+    /// per contact manifold, so a body pair touching with several sub-shapes takes several. It
+    /// does not grow with [`max_bodies`](Self::max_bodies). A full buffer sets
+    /// [`StepReport::contact_constraints_full`] or [`StepReport::manifold_cache_full`].
     #[must_use]
     pub fn max_contact_constraints(mut self, value: u32) -> Self {
         self.max_contact_constraints = value;
@@ -194,9 +206,11 @@ impl WorldSettings {
     /// Runs the world's jobs on Jolt's thread pool with `value` worker threads, in addition to
     /// the thread that calls [`PhysicsWorld::step`], which also runs jobs. At least 1 and at most
     /// [`WorldSettings::MAX_WORKER_THREADS`]. Default 1. The determinism tests get bit-identical
-    /// results with 1 and 4 workers on one machine ([docs/determinism.md]).
+    /// results with 1 and 4 workers on one machine ([docs/determinism.md]). 0 is refused;
+    /// [`single_threaded`](Self::single_threaded) runs without worker threads.
     ///
-    /// Of this and [`job_system`](Self::job_system), the call made last decides.
+    /// Of this, [`single_threaded`](Self::single_threaded) and [`job_system`](Self::job_system),
+    /// the call made last decides.
     ///
     /// [docs/determinism.md]: https://github.com/pockerhead/oxijolt/blob/main/docs/determinism.md
     #[must_use]
@@ -205,12 +219,28 @@ impl WorldSettings {
         self
     }
 
+    /// Runs the world's jobs with Jolt's single-threaded job system (`JobSystemSingleThreaded`):
+    /// every job runs on the thread that calls [`PhysicsWorld::step`] as soon as it is ready, with
+    /// concurrency 1, and Jolt starts no threads for the world. The determinism tests get the same
+    /// results as with Jolt's thread pool ([docs/determinism.md]).
+    ///
+    /// Of this, [`worker_threads`](Self::worker_threads) and [`job_system`](Self::job_system), the
+    /// call made last decides.
+    ///
+    /// [docs/determinism.md]: https://github.com/pockerhead/oxijolt/blob/main/docs/determinism.md
+    #[must_use]
+    pub fn single_threaded(mut self) -> Self {
+        self.jobs = JobSystemChoice::SingleThreaded;
+        self
+    }
+
     /// Runs the world's jobs on the caller's `value` instead of Jolt's thread pool; Jolt then
     /// starts no threads for the world. The world keeps the `Arc` as long as it lives, and
     /// [`PhysicsWorld::new`] reads [`JobSystem::max_concurrency`] once, which must be within
     /// `1..=`[`WorldSettings::MAX_CONCURRENCY`].
     ///
-    /// Of this and [`worker_threads`](Self::worker_threads), the call made last decides.
+    /// Of this, [`worker_threads`](Self::worker_threads) and
+    /// [`single_threaded`](Self::single_threaded), the call made last decides.
     #[must_use]
     pub fn job_system(mut self, value: Arc<dyn JobSystem>) -> Self {
         self.jobs = JobSystemChoice::Caller(value);
@@ -302,15 +332,17 @@ impl JoltObject for JPH_TempAllocator {
     }
 }
 
-/// A world's job system: Jolt's thread pool, owned by the world, or joltc's callback job system
-/// for the caller's [`JobSystem`], owned by the world and by every job still queued.
+/// A world's job system: Jolt's thread pool or single-threaded job system, owned by the world, or
+/// joltc's callback job system for the caller's [`JobSystem`], owned by the world and by every job
+/// still queued.
 impl JoltObject for JPH_JobSystem {
     unsafe fn destroy(ptr: *mut Self) {
         // SAFETY: the owner owns the job system (trait contract), and no step is running: `step`
         // borrows the world mutably, and the last owner of a callback job system holds no job
         // that Jolt could still run. Destroying a thread pool joins its worker threads; a
-        // callback job system has no threads and may be destroyed on any thread, also on one of
-        // the caller's pool threads.
+        // single-threaded job system has no threads and keeps only its free list of jobs
+        // (`JobSystemSingleThreaded.cpp`); a callback job system has no threads and may be
+        // destroyed on any thread, also on one of the caller's pool threads.
         unsafe { JPH_JobSystem_Destroy(ptr) };
     }
 }
@@ -319,6 +351,8 @@ impl JoltObject for JPH_JobSystem {
 enum WorldJobSystem {
     /// Jolt's thread pool.
     ThreadPool(Owned<JPH_JobSystem>),
+    /// Jolt's single-threaded job system.
+    SingleThreaded(Owned<JPH_JobSystem>),
     /// joltc's callback job system, which hands jobs to the caller's [`JobSystem`].
     Caller(Arc<QueueContext>),
 }
@@ -341,9 +375,20 @@ impl WorldJobSystem {
         Ok(Self::ThreadPool(pool))
     }
 
+    /// Creates Jolt's single-threaded job system.
+    fn single_threaded() -> Result<Self, WorldError> {
+        // SAFETY: Jolt is initialised (`PhysicsWorld::new` checked `ensure_initialized` first). 0
+        // selects Jolt's `cMaxPhysicsJobs`, more jobs than one update of a concurrency-1 job
+        // system holds at once (docs/limits.md#collision-steps). The handle takes over the
+        // returned job system.
+        let jobs = unsafe { Owned::from_raw(JPH_JobSystemSingleThreaded_Create(0)) }
+            .ok_or(WorldError::AllocationFailed("job system"))?;
+        Ok(Self::SingleThreaded(jobs))
+    }
+
     fn as_ptr(&self) -> *mut JPH_JobSystem {
         match self {
-            Self::ThreadPool(pool) => pool.as_ptr(),
+            Self::ThreadPool(pool) | Self::SingleThreaded(pool) => pool.as_ptr(),
             Self::Caller(context) => context.as_ptr(),
         }
     }
@@ -352,7 +397,7 @@ impl WorldJobSystem {
     /// the stepping thread and returns the first panic of its `queue_job` during the step.
     fn finish_update(&self) -> Option<Box<dyn Any + Send>> {
         match self {
-            Self::ThreadPool(_) => None,
+            Self::ThreadPool(_) | Self::SingleThreaded(_) => None,
             Self::Caller(context) => context.finish_update(),
         }
     }
@@ -394,8 +439,8 @@ pub(crate) fn advance_structure_epoch(epoch: &mut u64) {
 
 /// A Jolt physics system with its collision layers, its own job system and temp allocator.
 ///
-/// The job system is Jolt's thread pool, or a native one that hands the jobs to the caller's
-/// [`JobSystem`] ([`WorldSettings::job_system`]).
+/// The job system is Jolt's thread pool, Jolt's single-threaded job system, or a native one that
+/// hands the jobs to the caller's [`JobSystem`] ([`WorldSettings::job_system`]).
 ///
 /// Changing the world, including [`step`](Self::step), takes `&mut self`; reading takes
 /// `&self`, so many threads can read one world while nobody steps it. Several worlds are
@@ -496,7 +541,9 @@ impl Drop for PhysicsWorld {
 // allocator and job system serve one call at a time
 // (https://jrouwe.github.io/JoltPhysicsDocs/5.6.0/index.html#multi-threaded-access). A caller
 // job system is `Send + Sync` by the `JobSystem` bound, and its native callback object is
-// `Send + Sync` (see `CallbackJobSystem`).
+// `Send + Sync` (see `CallbackJobSystem`). Jolt's single-threaded job system runs jobs on the
+// stepping thread and holds no thread-local or thread-bound state, so it has no thread affinity
+// either.
 unsafe impl Send for PhysicsWorld {}
 // SAFETY: no `&self` method touches the job system. Every `&self` method only calls Jolt's
 // locking body interface, read-only system
@@ -549,6 +596,9 @@ unsafe fn physics_settings(system: *mut JPH_PhysicsSystem) -> JPH_PhysicsSetting
 pub(crate) const DELTA_TIME_RULE: &str =
     "delta time must be finite and between MIN_DELTA_TIME and MAX_DELTA_TIME";
 
+/// What a collision step count must satisfy ([`PhysicsWorld::step_with_collision_steps`]).
+const COLLISION_STEPS_RULE: &str = "collision_steps must be between 1 and MAX_COLLISION_STEPS";
+
 impl PhysicsWorld {
     /// Largest time step [`step`](Self::step) accepts, in seconds, inclusive.
     ///
@@ -565,7 +615,18 @@ impl PhysicsWorld {
     /// (`WheeledVehicleController::PostCollide`). A subnormal step makes these infinite. The
     /// bound keeps the divisor away from subnormal values; a huge numerator can still overflow a
     /// quotient, and the bound does not limit every force or velocity a step can produce.
+    /// [`step_with_collision_steps`](Self::step_with_collision_steps) also requires each
+    /// collision step, `delta_time / collision_steps`, to be at least this long, because Jolt
+    /// divides by the collision step.
     pub const MIN_DELTA_TIME: f32 = 1.0e-6;
+
+    /// Largest collision step count [`step_with_collision_steps`](Self::step_with_collision_steps)
+    /// accepts, inclusive. A oxijolt bound, not a Jolt limit: with more collision steps one update
+    /// can create more jobs than Jolt's fixed job pool holds (`cMaxPhysicsJobs`, 2048), and then
+    /// the step asserts or stalls. See [docs/limits.md].
+    ///
+    /// [docs/limits.md]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#collision-steps
+    pub const MAX_COLLISION_STEPS: u32 = 4;
 
     /// Whether `delta_time` is finite and within `MIN_DELTA_TIME..=MAX_DELTA_TIME`.
     pub(crate) fn is_valid_delta_time(delta_time: f32) -> bool {
@@ -592,6 +653,7 @@ impl PhysicsWorld {
 
         let job_system = match &settings.jobs {
             JobSystemChoice::ThreadPool(workers) => WorldJobSystem::thread_pool(*workers)?,
+            JobSystemChoice::SingleThreaded => WorldJobSystem::single_threaded()?,
             JobSystemChoice::Caller(job_system) => WorldJobSystem::Caller(
                 create_caller_job_system(Arc::clone(job_system), max_concurrency)?,
             ),
@@ -762,6 +824,8 @@ impl PhysicsWorld {
     /// [`StepError::InvalidDeltaTime`] is returned. Every other call advances the world and
     /// returns a [`StepReport`]; check [`StepReport::is_complete`] to learn whether Jolt
     /// dropped work because a fixed-size buffer was full.
+    /// [`step_with_collision_steps`](Self::step_with_collision_steps) splits a step into several
+    /// collision steps.
     ///
     /// # Panics
     /// With a caller [`JobSystem`], a panic in its [`queue_job`](JobSystem::queue_job) does not
@@ -775,7 +839,65 @@ impl PhysicsWorld {
     /// panic came first. It also resumes a callback panic from between steps that
     /// [`take_events`](Self::take_events) has not resumed yet.
     pub fn step(&mut self, delta_time: f32) -> Result<StepReport, StepError> {
-        if !Self::is_valid_delta_time(delta_time) {
+        self.step_with_collision_steps(delta_time, 1)
+    }
+
+    /// Advances the world by `delta_time` seconds in `collision_steps` collision steps of
+    /// `delta_time / collision_steps` each, inside one Jolt update. Each collision step runs
+    /// collision detection, the solver and integration. Jolt's `PhysicsSystem::Update`: "The
+    /// world steps for a total of inDeltaTime seconds. This is divided in inCollisionSteps
+    /// iterations. Each iteration consists of collision detection followed by an integration
+    /// step" ([The Simulation Step]).
+    ///
+    /// Use it to sub-step a fast scene instead of calling [`step`](Self::step) N times with
+    /// `delta_time / N`: Jolt builds one job graph and the caller waits once. Separate calls let
+    /// the caller change inputs between sub-steps, and they place force clearing, sleep checks
+    /// and event batches at each call, so the two can give different results.
+    ///
+    /// One [`StepReport`] and one event batch cover the whole call; a report flag is set if any
+    /// collision step dropped work.
+    ///
+    /// Forces and torques added to a rigid body act over all collision steps and are cleared
+    /// after the last one. A force added to a soft body acts only in the first collision step,
+    /// because Jolt clears it after each one. World gravity acts in every collision step.
+    /// Constraint impulses (`total_lambda*`) are those of the last collision step: divide by
+    /// `delta_time / collision_steps` for a force ([docs/constraints.md]).
+    ///
+    /// # Errors
+    /// [`StepError::InvalidValue`] when `collision_steps` is 0 or above
+    /// [`MAX_COLLISION_STEPS`](Self::MAX_COLLISION_STEPS); [`StepError::InvalidDeltaTime`] as for
+    /// [`step`](Self::step), and also when a collision step would be shorter than
+    /// [`MIN_DELTA_TIME`](Self::MIN_DELTA_TIME). On `Err` nothing happens.
+    ///
+    /// # Panics
+    /// As [`step`](Self::step).
+    ///
+    /// # Example
+    /// ```
+    /// use oxijolt::prelude::math::*;
+    /// use oxijolt::prelude::*;
+    ///
+    /// let mut world = PhysicsWorld::new(WorldSettings::default()).unwrap();
+    /// let ball = Shape::new_sphere(0.5).unwrap();
+    /// let settings = BodySettings::new_dynamic().position(RVec3::new(0.0, 5.0, 0.0));
+    /// world.create_body(&ball, &settings).unwrap();
+    /// // 1/30 s in two collision steps of 1/60 s.
+    /// assert!(world.step_with_collision_steps(1.0 / 30.0, 2).unwrap().is_complete());
+    /// ```
+    ///
+    /// [The Simulation Step]: https://jrouwe.github.io/JoltPhysicsDocs/5.6.0/index.html#the-simulation-step
+    /// [docs/constraints.md]: https://github.com/pockerhead/oxijolt/blob/main/docs/constraints.md#breakable-constraints
+    pub fn step_with_collision_steps(
+        &mut self,
+        delta_time: f32,
+        collision_steps: u32,
+    ) -> Result<StepReport, StepError> {
+        if !(1..=Self::MAX_COLLISION_STEPS).contains(&collision_steps) {
+            return Err(StepError::InvalidValue(COLLISION_STEPS_RULE));
+        }
+        if !Self::is_valid_delta_time(delta_time)
+            || delta_time / (collision_steps as f32) < Self::MIN_DELTA_TIME
+        {
             return Err(StepError::InvalidDeltaTime);
         }
         self.listeners.begin_step();
@@ -789,7 +911,8 @@ impl PhysicsWorld {
             JPH_PhysicsSystem_Update2(
                 self.system.as_ptr(),
                 delta_time,
-                1,
+                // Bounded to `1..=MAX_COLLISION_STEPS` above.
+                collision_steps as i32,
                 self.temp_allocator.as_ptr(),
                 self.job_system.as_ptr(),
             )
@@ -837,10 +960,9 @@ impl PhysicsWorld {
     }
 }
 
-/// What a [`PhysicsWorld::step`] that ran reports. The world has advanced either way.
-///
-/// When a fixed-size buffer was full, Jolt finished the step but ignored some contacts; the
-/// flags say which buffer, and the matching [`WorldSettings`] limit should be raised.
+/// What a [`PhysicsWorld::step`] or [`PhysicsWorld::step_with_collision_steps`] that ran reports.
+/// The flags say which fixed-size buffer was full; [`is_complete`](Self::is_complete) says
+/// what that means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "a step may have dropped contacts; check `is_complete`"]
 #[non_exhaustive]
@@ -862,7 +984,10 @@ pub struct StepReport {
 }
 
 impl StepReport {
-    /// Whether the step ran without dropping any work.
+    /// Whether the step ran without dropping any work. `false` means Jolt ignored some contacts
+    /// because a fixed-size buffer was full in some collision step. The world is still valid and
+    /// has advanced; raise the [`WorldSettings`] limit the set flag names. Rejected contact
+    /// settings do not count.
     pub fn is_complete(&self) -> bool {
         !(self.manifold_cache_full || self.body_pair_cache_full || self.contact_constraints_full)
     }
