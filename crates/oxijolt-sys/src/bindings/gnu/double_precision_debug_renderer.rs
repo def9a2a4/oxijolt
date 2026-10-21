@@ -10879,6 +10879,24 @@ unsafe extern "C" {
         constraint: *mut JPH_VehicleConstraint,
     ) -> *mut JPH_Constraint;
 }
+#[repr(C)]
+#[derive(Debug)]
+pub struct JPH_VehicleStepListener {
+    _unused: [u8; 0],
+}
+unsafe extern "C" {
+    pub fn JPH_VehicleStepListener_Create(
+        constraint: *mut JPH_VehicleConstraint,
+    ) -> *mut JPH_VehicleStepListener;
+}
+unsafe extern "C" {
+    pub fn JPH_VehicleStepListener_Destroy(listener: *mut JPH_VehicleStepListener);
+}
+unsafe extern "C" {
+    pub fn JPH_VehicleStepListener_AsPhysicsStepListener(
+        listener: *mut JPH_VehicleStepListener,
+    ) -> *mut JPH_PhysicsStepListener;
+}
 unsafe extern "C" {
     pub fn JPH_VehicleCollisionTesterRay_Create2(
         layer: JPH_ObjectLayer,

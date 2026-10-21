@@ -60,6 +60,23 @@ JPH_CAPI void JPH_CharacterVirtual_RefreshContacts2(JPH_CharacterVirtual* charac
    and JPH_Constraint_Destroy; counterpart of JPH_VehicleConstraint_AsPhysicsStepListener. */
 JPH_CAPI JPH_Constraint* JPH_VehicleConstraint_AsConstraint(JPH_VehicleConstraint* constraint);
 
+/* VehicleStepListener */
+typedef struct JPH_VehicleStepListener JPH_VehicleStepListener; /* a JPH::PhysicsStepListener that forwards to one vehicle */
+
+/* A step listener to register instead of JPH_VehicleConstraint_AsPhysicsStepListener. It runs the
+   vehicle's VehicleConstraint::OnStep in every collision step, but a gravity override acts once per
+   collision step, as world gravity does: Jolt's OnStep adds the override force to the chassis in
+   every collision step while the force accumulator is reset only after the last one, so collision
+   step k of one PhysicsSystem::Update would get k times the override. From the second time OnStep
+   adds it in one update, the listener restores the chassis force it had before OnStep. With one
+   collision step it only forwards. The listener keeps a plain pointer to constraint, which must
+   outlive its registration; the caller owns the listener and destroys it with
+   JPH_VehicleStepListener_Destroy after JPH_PhysicsSystem_RemoveStepListener. Not reference counted. */
+JPH_CAPI JPH_VehicleStepListener* JPH_VehicleStepListener_Create(JPH_VehicleConstraint* constraint);
+JPH_CAPI void JPH_VehicleStepListener_Destroy(JPH_VehicleStepListener* listener);
+/* The PhysicsStepListener base, for JPH_PhysicsSystem_AddStepListener and _RemoveStepListener. */
+JPH_CAPI JPH_PhysicsStepListener* JPH_VehicleStepListener_AsPhysicsStepListener(JPH_VehicleStepListener* listener);
+
 /* VehicleCollisionTester */
 /* Like JPH_VehicleCollisionTesterRay_Create, _CastSphere_Create and _CastCylinder_Create, but the tester
    skips soft bodies as well as the chassis vehicleBody (Jolt's default body filter skips only the
