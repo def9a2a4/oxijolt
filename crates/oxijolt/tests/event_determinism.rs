@@ -281,7 +281,7 @@ fn has_repeated_pair(contacts: &[ContactEvent]) -> bool {
     })
 }
 
-fn run_events(threads: u32, variant: &str) -> Digest {
+fn run_events(threads: u32, variant: &str, collision_steps: u32) -> Digest {
     let mut world = world(Vec3::new(0.0, -9.81, 0.0), threads);
     configure(&mut world, variant);
     let materials = [
@@ -315,7 +315,9 @@ fn run_events(threads: u32, variant: &str) -> Digest {
                 RVec3::new(-2.0, 3.0, 8.0),
             ));
         }
-        let report = world.step(DT).unwrap();
+        let report = world
+            .step_with_collision_steps(DT, collision_steps)
+            .unwrap();
         assert!(report.is_complete(), "tick {tick}: {report:?}");
         let events = world.take_events();
         repeated_pair |= has_repeated_pair(&events.contacts);
@@ -364,7 +366,8 @@ fn event_determinism_child() {
     };
     let job_choice = JobChoice::from_env();
     let digest = match scenario.as_str() {
-        "events" => run_events(threads, &variant),
+        "events" => run_events(threads, &variant, 1),
+        "sub_stepped_events" => run_events(threads, &variant, PhysicsWorld::MAX_COLLISION_STEPS),
         scenario => panic!("unknown scenario {scenario}"),
     };
     match job_choice {
@@ -383,6 +386,14 @@ fn events_are_identical_with_1_and_4_workers() {
     let four = digest_in_child(CHILD, "events", 4, "events");
     assert!(one.ticks.iter().any(|tick| !tick.shape.is_empty()));
     assert_same("events, 1 vs 4 workers", &one, &four);
+}
+
+#[test]
+fn sub_stepped_events_are_identical_with_1_and_4_workers() {
+    let one = digest_in_child(CHILD, "sub_stepped_events", 1, "events");
+    let four = digest_in_child(CHILD, "sub_stepped_events", 4, "events");
+    assert!(one.ticks.iter().any(|tick| !tick.shape.is_empty()));
+    assert_same("sub-stepped events, 1 vs 4 workers", &one, &four);
 }
 
 #[test]

@@ -239,8 +239,8 @@ impl ConstraintSettings for GearConstraintSettings {
 }
 
 impl ConstraintRef<'_, GearConstraint> {
-    /// The angular impulse in N·m·s the gear applied in the last step: to body 1 about its axis
-    /// and, as is rather than `ratio` times it, to body 2 about its axis (see
+    /// The angular impulse in N·m·s the gear applied in the last collision step: to body 1 about
+    /// its axis and, as is rather than `ratio` times it, to body 2 about its axis (see
     /// [docs/constraints.md#limits-on-what-is-accepted]).
     ///
     /// [docs/constraints.md#limits-on-what-is-accepted]: https://github.com/pockerhead/oxijolt/blob/main/docs/constraints.md#limits-on-what-is-accepted

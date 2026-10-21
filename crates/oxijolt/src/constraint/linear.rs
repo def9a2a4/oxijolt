@@ -149,7 +149,7 @@ impl ConstraintSettings for FixedConstraintSettings {
 }
 
 impl ConstraintRef<'_, FixedConstraint> {
-    /// The impulse in N·s the position part applied in the last step.
+    /// The impulse in N·s the position part applied in the last collision step.
     pub fn total_lambda_position(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: the world borrowed here owns the constraint; the getter reads a member, and
@@ -158,7 +158,7 @@ impl ConstraintRef<'_, FixedConstraint> {
         Vec3::from_jph(value)
     }
 
-    /// The angular impulse in N·m·s the rotation part applied in the last step.
+    /// The angular impulse in N·m·s the rotation part applied in the last collision step.
     pub fn total_lambda_rotation(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `total_lambda_position`.
@@ -245,7 +245,7 @@ impl ConstraintSettings for PointConstraintSettings {
 }
 
 impl ConstraintRef<'_, PointConstraint> {
-    /// The impulse in N·s the constraint applied in the last step.
+    /// The impulse in N·s the constraint applied in the last collision step.
     pub fn total_lambda_position(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: the world borrowed here owns the constraint; the getter reads a member, and

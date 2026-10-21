@@ -6,7 +6,8 @@ test, the paths only tests cover, and what no bound excludes. Line numbers refer
 Jolt 5.6 sources (`crates/oxijolt-sys/vendor/JoltPhysics/Jolt/Physics/`).
 
 The derivations hold with every input at its bound and a time step `dt <= 1` s
-(`PhysicsWorld::MAX_DELTA_TIME`); numbers are rounded.
+(`PhysicsWorld::MAX_DELTA_TIME`); every collision step lies between `PhysicsWorld::MIN_DELTA_TIME`
+and that. Numbers are rounded.
 
 ## Frame and extent
 
@@ -383,7 +384,7 @@ stack at 2 velocity and 0 position steps stays finite and above the floor for 60
 ## Accelerations
 
 `MAX_ACCELERATION` is `MAX_LINEAR_VELOCITY / PhysicsWorld::MIN_DELTA_TIME`, about 5e8 m/s². A larger
-acceleration already reaches Jolt's speed clamp within every step `PhysicsWorld::step` accepts, so
+acceleration already reaches Jolt's speed clamp within every collision step the world accepts, so
 the bound removes no motion that the clamp keeps. `MAX_ANGULAR_ACCELERATION` is the same for Jolt's
 angular speed clamp.
 
@@ -732,8 +733,9 @@ below 1e35.
 ## Soft body compliance
 
 Jolt divides each compliance by the squared sub-step
-(`SoftBodyMotionProperties.cpp:371,445,496,577,594`). `PhysicsWorld::step` always runs one collision
-step, so a sub-step is at least `PhysicsWorld::MIN_DELTA_TIME` divided by
+(`SoftBodyMotionProperties.cpp:371,445,496,577,594`). A collision step is at least
+`PhysicsWorld::MIN_DELTA_TIME` (`step_with_collision_steps` refuses shorter ones), so a sub-step is
+at least `MIN_DELTA_TIME` divided by
 `SoftBodySettings::MAX_ITERATIONS`, 1e-8 s, and `compliance / dt²` is at most `1e20 · 1e16 = 1e36`,
 below `f32::MAX`; Jolt's average of two compliances, `0.5 · (c1 + c2)`, stays finite as well. This
 proves that the product is finite, not that the solver is stable at every compliance.
@@ -1266,6 +1268,52 @@ from the root offset: accepted with `f32` positions, refused as `DegenerateChain
 Jolt corrects a violated limit by the distance beyond it times the effective mass
 (`SixDOFConstraint.cpp:380-410,780-790`); limits within `MAX_SHAPE_EXTENT` keep that finite. A limit
 of 1e30 m moved two parts to NaN positions in a few steps.
+
+## Collision steps
+
+`PhysicsWorld::MAX_COLLISION_STEPS` is 4. It bounds the jobs one update creates, because Jolt keeps
+them in fixed-size storage: the job free list of the thread pool and of joltc's callback job system
+(`cMaxPhysicsJobs`, 2048, `PhysicsSettings.h:25`), the barrier ring the stepping thread drains
+(`JobSystemWithBarrier::cMaxJobs`, 2048, `Core/JobSystemWithBarrier.h:71`), and the array of static
+job handles (`StaticArray<JobHandle, cMaxPhysicsJobs>`, `PhysicsSystem.cpp:585`). A caller job
+system's table holds every queued job until the update returns. Jolt queues each job exactly once,
+when its dependency count reaches zero, so the number of `JobSystem::queue_job` calls in one update
+is the number of jobs that update created.
+
+Jolt fixes the job counts once per update (`PhysicsSystem.cpp:240-263`), with the effective
+concurrency `C = min(job system concurrency, 32)` (`PhysicsUpdateContext.h:34,152`). Per collision
+step it creates at most:
+
+- 11 single jobs: UpdateBroadPhasePrepare, UpdateBroadPhaseFinalize, BuildIslandsFromConstraints,
+  FinalizeIslands, ContactRemovedCallbacks, BodySetIslandIndex, PreIntegrateVelocity,
+  PostIntegrateVelocity, ResolveCCDContacts, SoftBodyPrepare and StartNextStep, which the last
+  collision step lacks;
+- StepListeners `<= C`, DetermineActiveConstraints `<= C - 2`, ApplyGravity `<= C - 2`,
+  FindCollisions `<= C`, SetupVelocityConstraints `<= C`, SolveVelocityConstraints `C`,
+  IntegrateVelocity `<= C`, SolvePositionConstraints `C` (`:266-570`);
+- with active soft bodies `1 + 2C` more (`:2745-2779`), with continuous collision detection `<= C`
+  more (`:1726`).
+
+At `C = 32` that is 360 jobs per collision step and `360·N - 1` per update: 1439 at `N = 4`, 1079 at
+`N = 3`, 359 at one collision step. Jolt's single-threaded job system (`C = 1`) stays far below.
+The one kind of job this count leaves out is a FindCollisions job Jolt spawns while the step runs
+(`TrySpawnJobFindCollisions`, `:830-878`); call their number `R`.
+
+A count `N` is accepted when `(360·N - 1) + 2·R <= 2048`, `R` being the largest respawn count
+measured below, with a factor two of margin on it because the measurement covers one scene, not
+every scene. That allows `R <= 304` at `N = 4` and `R <= 484` at `N = 3`.
+
+The measurement (`a_saturated_update_at_max_collision_steps_fits_jolts_job_pool`): a floor and
+2048 awake unit cubes in a 16 x 16 grid of columns of 8, discrete motion, no constraints, listeners
+or soft bodies, 30 updates of 4 collision steps each, on a counting inline job system of concurrency
+32 and on a counting Rayon pool of 31 threads (concurrency 32). The scene's static count is
+`171·N - 1` (11 single jobs, DetermineActiveConstraints 1, ApplyGravity 30, FindCollisions 32,
+SetupVelocityConstraints 1 and 32 each of SolveVelocity, IntegrateVelocity and SolvePosition per
+collision step), 683 at `N = 4`. Every update of both job systems queued exactly 683 jobs, so the
+largest respawn count was 0 for both, in three runs. The scene starts the full 32 FindCollisions
+jobs, and Jolt spawns another one only when one of them has finished while body pairs are still
+waiting, which these runs never hit. `N = 4` is therefore accepted. The test asserts the count
+formula and the budget, under a timeout, because an exhausted pool spins instead of failing.
 
 ## Contact constraint capacity
 

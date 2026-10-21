@@ -498,8 +498,8 @@ impl ConstraintRef<'_, PathConstraint> {
         unsafe { JPH_PathConstraint_GetMaxFrictionForce(self.ptr()) }
     }
 
-    /// The impulses in N·s that kept body 2 on the path in the last step, along the normal and
-    /// the binormal.
+    /// The impulses in N·s that kept body 2 on the path in the last collision step, along the
+    /// normal and the binormal.
     pub fn total_lambda_position(&self) -> [f32; 2] {
         let mut value = [0.0; 2];
         // SAFETY: as in `path_fraction`; `value` has room for the two values joltc writes.
@@ -507,7 +507,7 @@ impl ConstraintRef<'_, PathConstraint> {
         value
     }
 
-    /// The impulse in N·s the path's ends applied in the last step.
+    /// The impulse in N·s the path's ends applied in the last collision step.
     pub fn total_lambda_position_limits(&self) -> f32 {
         // SAFETY: as in `path_fraction`.
         unsafe { JPH_PathConstraint_GetTotalLambdaPositionLimits(self.ptr()) }
@@ -540,7 +540,7 @@ impl ConstraintRef<'_, PathConstraint> {
         value
     }
 
-    /// The angular impulse in N·m·s that held body 2's rotation in the last step, for
+    /// The angular impulse in N·m·s that held body 2's rotation in the last collision step, for
     /// [`PathRotationConstraint::ConstrainToPath`] and `FullyConstrained`; zero for the other
     /// rotation constraints.
     pub fn total_lambda_rotation(&self) -> Vec3 {
