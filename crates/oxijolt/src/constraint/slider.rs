@@ -273,7 +273,7 @@ impl ConstraintRef<'_, SliderConstraint> {
     }
 
     /// The impulse in N·s the motor, or the friction while the motor is off, applied in the last
-    /// step.
+    /// collision step.
     pub fn total_lambda_motor(&self) -> f32 {
         // SAFETY: as in `motor_state`.
         unsafe { JPH_SliderConstraint_GetTotalLambdaMotor(self.ptr()) }

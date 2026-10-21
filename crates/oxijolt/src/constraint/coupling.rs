@@ -406,7 +406,7 @@ impl ConstraintSettings for RackAndPinionConstraintSettings {
 
 impl ConstraintRef<'_, RackAndPinionConstraint> {
     /// The angular impulse in N·m·s the rack and pinion applied to the pinion (body 1) in the
-    /// last step; the rack (body 2) gets `-ratio` times it in N·s along its axis.
+    /// last collision step; the rack (body 2) gets `-ratio` times it in N·s along its axis.
     pub fn total_lambda(&self) -> f32 {
         // SAFETY: the world borrowed here owns the constraint; the getter reads a member.
         unsafe { JPH_RackAndPinionConstraint_GetTotalLambda(self.ptr()) }

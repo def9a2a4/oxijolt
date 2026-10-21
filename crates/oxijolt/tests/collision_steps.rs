@@ -162,6 +162,24 @@ fn a_refused_call_consumes_nothing() {
 }
 
 #[test]
+fn a_refused_call_keeps_the_queued_events() {
+    let (mut refused, _) = pending_world();
+    let (mut control, _) = pending_world();
+    for world in [&mut refused, &mut control] {
+        assert!(world.step(DT).unwrap().is_complete());
+    }
+    // A valid total whose collision steps are too short.
+    let total = PhysicsWorld::MIN_DELTA_TIME * 2.0;
+    assert_eq!(
+        refused.step_with_collision_steps(total, MAX),
+        Err(StepError::InvalidDeltaTime)
+    );
+    let events = format!("{:?}", refused.take_events());
+    assert!(events.contains("Persisted"), "{events}");
+    assert_eq!(events, format!("{:?}", control.take_events()));
+}
+
+#[test]
 fn collision_steps_cover_the_whole_delta_time() {
     for count in 1..=MAX {
         let mut world = world(NO_GRAVITY, 1);

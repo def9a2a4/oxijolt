@@ -271,14 +271,22 @@ fn record_events(events: &WorldEvents, out: &mut Vec<u8>) {
     }
 }
 
-/// Whether two contact events of one step share their pair and come from one continuous
-/// collision cast and one discrete contact: Added or Persisted twice for one pair.
-fn has_repeated_pair(contacts: &[ContactEvent]) -> bool {
-    contacts.windows(2).any(|w| {
-        w[0].pair() == w[1].pair()
-            && !matches!(w[0], ContactEvent::Removed(_))
-            && !matches!(w[1], ContactEvent::Removed(_))
-    })
+/// Whether one call of `collision_steps` collision steps reported a pair from a continuous
+/// collision cast and a discrete contact in one collision step. A pair gets at most one Added
+/// or Persisted per collision step from either alone, so this is more Added and Persisted
+/// events for one pair than the call has collision steps.
+fn has_repeated_pair(contacts: &[ContactEvent], collision_steps: u32) -> bool {
+    let mut counts: Vec<(SubShapeIdPair, u32)> = Vec::new();
+    for event in contacts {
+        if matches!(event, ContactEvent::Removed(_)) {
+            continue;
+        }
+        match counts.iter_mut().find(|(pair, _)| *pair == event.pair()) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((event.pair(), 1)),
+        }
+    }
+    counts.iter().any(|&(_, count)| count > collision_steps)
 }
 
 fn run_events(threads: u32, variant: &str, collision_steps: u32) -> Digest {
@@ -320,7 +328,7 @@ fn run_events(threads: u32, variant: &str, collision_steps: u32) -> Digest {
             .unwrap();
         assert!(report.is_complete(), "tick {tick}: {report:?}");
         let events = world.take_events();
-        repeated_pair |= has_repeated_pair(&events.contacts);
+        repeated_pair |= has_repeated_pair(&events.contacts, collision_steps);
         rod_estimated |= events.contacts.iter().any(|event| {
             matches!(
                 event,

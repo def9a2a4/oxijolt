@@ -133,7 +133,7 @@ impl ConstraintRef<'_, HingeConstraint> {
     }
 
     /// The angular impulses in N·m·s that kept body 2 turning only about the hinge axis in the
-    /// last step, about the two constraint axes perpendicular to it.
+    /// last collision step, about the two constraint axes perpendicular to it.
     pub fn total_lambda_rotation(&self) -> [f32; 2] {
         let mut value = [0.0; 2];
         // SAFETY: as in `motor_state`; `value` has room for the two values joltc writes.
@@ -555,9 +555,9 @@ impl ConstraintRef<'_, SwingTwistConstraint> {
     }
 
     /// The angular impulses in N·m·s the twist, swing Y and swing Z limit parts applied in the
-    /// last step, each about an axis Jolt picks for that step. A limit with a range only pushes
-    /// back and turns its axis round at its minimum, so a twist limit reads zero or less at either
-    /// end; a locked axis reads either sign. With both swing axes limited Jolt solves one swing
+    /// last collision step, each about an axis Jolt picks for that step. A limit with a range
+    /// only pushes back and turns its axis round at its minimum, so a twist limit reads zero or
+    /// less at either end; a locked axis reads either sign. With both swing axes limited Jolt solves one swing
     /// limit, about the axis from the nearest allowed swing to the current one, in the swing Y
     /// part, and swing Z reads 0. Compare the length of the three with a torque limit, not one
     /// component (see [docs/constraints.md#breakable-constraints]).
@@ -575,7 +575,7 @@ impl ConstraintRef<'_, SwingTwistConstraint> {
     }
 
     /// The angular impulses in N·m·s the motors, or the friction while they are off, applied in
-    /// the last step, per constraint axis (twist, swing Y, swing Z).
+    /// the last collision step, per constraint axis (twist, swing Y, swing Z).
     pub fn total_lambda_motor(&self) -> Vec3 {
         let mut value = Vec3::ZERO.to_jph();
         // SAFETY: as in `target_orientation_cs`.

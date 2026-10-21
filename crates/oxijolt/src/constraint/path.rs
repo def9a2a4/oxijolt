@@ -514,7 +514,7 @@ impl ConstraintRef<'_, PathConstraint> {
     }
 
     /// The impulse in N·s the motor, or the friction while the motor is off, applied in the last
-    /// step.
+    /// collision step.
     pub fn total_lambda_motor(&self) -> f32 {
         // SAFETY: as in `path_fraction`.
         unsafe { JPH_PathConstraint_GetTotalLambdaMotor(self.ptr()) }
@@ -531,8 +531,9 @@ impl ConstraintRef<'_, PathConstraint> {
     }
 
     /// The angular impulses in N·m·s that kept body 2 turning only about the free axis in the
-    /// last step, for [`PathRotationConstraint::ConstrainAroundTangent`], `ConstrainAroundNormal`
-    /// and `ConstrainAroundBinormal`; zero for the other rotation constraints.
+    /// last collision step, for [`PathRotationConstraint::ConstrainAroundTangent`],
+    /// `ConstrainAroundNormal` and `ConstrainAroundBinormal`; zero for the other rotation
+    /// constraints.
     pub fn total_lambda_rotation_hinge(&self) -> [f32; 2] {
         let mut value = [0.0; 2];
         // SAFETY: as in `path_fraction`; `value` has room for the two values joltc writes.

@@ -279,7 +279,7 @@ pub(crate) struct ConstraintEntry {
 /// motors, friction, the two-component readouts and six-DOF translation, the line between the
 /// points for a distance, and for swing-twist limits an axis Jolt picks each step (see
 /// [`total_lambda_limits`](ConstraintRef::total_lambda_limits)). A constraint whose bodies
-/// sleep, or that is disabled, keeps the values of the last step it was solved in. See
+/// sleep, or that is disabled, keeps the values of the last collision step it was solved in. See
 /// [docs/constraints.md#breakable-constraints].
 ///
 /// [docs/constraints.md#breakable-constraints]: https://github.com/pockerhead/oxijolt/blob/main/docs/constraints.md#breakable-constraints
@@ -384,7 +384,7 @@ impl<K: ConstraintKind> ConstraintMut<'_, K> {
 
     /// Enables or disables the constraint and wakes its bodies that can move, so a sleeping body
     /// starts or stops following the constraint at the next step. A disabled constraint keeps
-    /// the readouts of the last step it was solved in.
+    /// the readouts of the last collision step it was solved in.
     pub fn set_enabled(&mut self, enabled: bool) {
         // SAFETY: the world is borrowed mutably through this view and owns the constraint; no
         // step runs. The setter writes a member.

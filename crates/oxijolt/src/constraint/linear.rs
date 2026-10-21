@@ -399,7 +399,7 @@ impl ConstraintRef<'_, DistanceConstraint> {
     }
 
     /// The impulse in N·s the constraint applied along the line between the points in the last
-    /// step.
+    /// collision step.
     pub fn total_lambda_position(&self) -> f32 {
         // SAFETY: as in `min_distance`.
         unsafe { JPH_DistanceConstraint_GetTotalLambdaPosition(self.ptr()) }
