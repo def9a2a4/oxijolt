@@ -135,10 +135,12 @@ wrapped.
 
 ## Breakable constraints
 
-Every constraint reads back the impulses its solver parts applied in the last step it was solved
-in, through the `total_lambda*` methods of `ConstraintRef`: N·s for linear parts, N·m·s for
-angular parts. `PhysicsWorld::step` solves one collision step per call, so dividing a readout by
-the step's `delta_time` gives the mean force (N) or torque (N·m) the part applied over that step.
+Every constraint reads back the impulses its solver parts applied in the last collision step it
+was solved in, through the `total_lambda*` methods of `ConstraintRef`: N·s for linear parts, N·m·s
+for angular parts. `PhysicsWorld::step` solves one collision step per call, so dividing a readout
+by the step's `delta_time` gives the mean force (N) or torque (N·m) the part applied over that
+step. After `step_with_collision_steps(delta_time, n)` divide by `delta_time / n`: the readout is
+the last collision step's, not a sum or a peak over the call.
 Each readout is one part's share, not the net force on a body: the position part acts at the
 constraint point, so a weld 0.4 m beside the centre of mass of a hanging cube reads the weight in
 its position part and, in its rotation part, the torque that cancels the weight's moment about the
@@ -178,14 +180,16 @@ component.
 
 Jolt's own docs suggest this for breakable constraints (`Constraint::SetEnabled`): after a step,
 compare the impulse with a limit and disable the constraint once it is over. With oxijolt:
-- After each complete `step`, divide every enabled bond's readouts by `delta_time` and compare the
-  forces and the torques with separate limits.
+- After each complete `step`, divide every enabled bond's readouts by the collision step it was
+  solved in (`delta_time`, or `delta_time / n` with `n` collision steps) and compare the forces and
+  the torques with separate limits.
 - Break with `ConstraintMut::set_enabled(false)`. The enabled flag is part of the saved state, so
   `restore_state` brings a broken bond back. `remove_constraint` changes the world's structure:
   no state saved before it restores any more.
 - Skip disabled bonds. A disabled constraint, and one whose bodies sleep, keeps the readouts of the
-  last step it was solved in: for a broken bond that is the step that broke it. With a varying
-  `delta_time`, divide a sleeping bond's readout by the `delta_time` of the step it was solved in.
+  last collision step it was solved in: for a broken bond that is the step that broke it. With a
+  varying `delta_time` or collision step count, divide a sleeping bond's readout by the length of
+  the collision step it was solved in.
 - Jolt's velocity solver runs a fixed number of iterations per step
   (`WorldSettings::velocity_steps`), so in a chain of bonds one step's readouts are where those
   iterations stopped, not an exact solution. Leave the limits some headroom.

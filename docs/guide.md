@@ -69,7 +69,28 @@ creating bodies and shared between bodies and worlds.
 `PhysicsWorld::step(dt)` runs one collision step. `Err` means the step was rejected (a `dt` that is
 not finite or outside `MIN_DELTA_TIME` (1 µs) to `MAX_DELTA_TIME` (1 s)) and nothing happened. `Ok(report)` means the world advanced; `report.is_complete()` is false when
 Jolt dropped contacts because a fixed-size buffer was full, and the flag names the `WorldSettings`
-limit to raise.
+limit to raise. The world stays valid either way.
+
+`PhysicsWorld::step_with_collision_steps(dt, n)` advances by `dt` in `n` collision steps of `dt / n`
+inside one Jolt update, with `n` from 1 to `PhysicsWorld::MAX_COLLISION_STEPS` (4); `step(dt)` is
+the same call with `n = 1`. A count outside that range is `StepError::InvalidValue`, a collision
+step shorter than `MIN_DELTA_TIME` is `StepError::InvalidDeltaTime`. The call gives one report and
+one event batch. It is not the same as calling `step(dt / n)` `n` times: separate calls clear
+forces, check sleep and batch events at each call, and let the game change inputs in between
+([limits](limits.md#collision-steps)).
+
+```rust
+use oxijolt::prelude::*;
+
+fn main() -> oxijolt::error::Result<()> {
+    let mut world = PhysicsWorld::new(WorldSettings::default())?;
+    // 1/30 s in two collision steps of 1/60 s.
+    let report = world.step_with_collision_steps(1.0 / 30.0, 2)?;
+    assert!(report.is_complete());
+    assert!(world.step_with_collision_steps(1.0 / 30.0, 0).is_err());
+    Ok(())
+}
+```
 
 Gravity is per world (`WorldSettings::gravity`, `set_gravity`). A game with radial gravity sets it
 to zero and adds a force to each body before the step (`BodyMut::add_force`).

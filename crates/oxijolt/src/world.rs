@@ -173,22 +173,30 @@ impl WorldSettings {
     pub const MAX_SOLVER_STEPS: u32 = 255;
 
     /// Maximum number of bodies in the world, between 1 and [`MAX_BODIES`](Self::MAX_BODIES).
-    /// Default 10240.
+    /// Default 10240. Raising it does not raise [`max_body_pairs`](Self::max_body_pairs) or
+    /// [`max_contact_constraints`](Self::max_contact_constraints): size those separately for the
+    /// contacts the scene is expected to have.
     #[must_use]
     pub fn max_bodies(mut self, value: u32) -> Self {
         self.max_bodies = value;
         self
     }
 
-    /// Maximum number of body pairs the broad phase can report per step. Default 65536.
+    /// Maximum number of body pairs whose bounding boxes overlap that the broad phase can hand to
+    /// the narrow phase per collision step, at least 1. Default 65536. It does not grow with
+    /// [`max_bodies`](Self::max_bodies); size it for the expected overlapping pairs. A full buffer
+    /// sets [`StepReport::body_pair_cache_full`].
     #[must_use]
     pub fn max_body_pairs(mut self, value: u32) -> Self {
         self.max_body_pairs = value;
         self
     }
 
-    /// Maximum number of contact constraints per step, at least 1 and at most
-    /// [`WorldSettings::MAX_CONTACT_CONSTRAINTS`]. Default 10240.
+    /// Maximum number of contact constraints per collision step, at least 1 and at most
+    /// [`MAX_CONTACT_CONSTRAINTS`](Self::MAX_CONTACT_CONSTRAINTS). Default 10240. Jolt makes one
+    /// per contact manifold, so a body pair touching with several sub-shapes takes several. It
+    /// does not grow with [`max_bodies`](Self::max_bodies). A full buffer sets
+    /// [`StepReport::contact_constraints_full`] or [`StepReport::manifold_cache_full`].
     #[must_use]
     pub fn max_contact_constraints(mut self, value: u32) -> Self {
         self.max_contact_constraints = value;
@@ -953,10 +961,8 @@ impl PhysicsWorld {
 }
 
 /// What a [`PhysicsWorld::step`] or [`PhysicsWorld::step_with_collision_steps`] that ran reports.
-/// The world has advanced either way.
-///
-/// When a fixed-size buffer was full, Jolt finished the step but ignored some contacts; the
-/// flags say which buffer, and the matching [`WorldSettings`] limit should be raised.
+/// The flags say which fixed-size buffer was full; [`is_complete`](Self::is_complete) says
+/// what that means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "a step may have dropped contacts; check `is_complete`"]
 #[non_exhaustive]
@@ -978,7 +984,10 @@ pub struct StepReport {
 }
 
 impl StepReport {
-    /// Whether the step ran without dropping any work.
+    /// Whether the step ran without dropping any work. `false` means Jolt ignored some contacts
+    /// because a fixed-size buffer was full in some collision step. The world is still valid and
+    /// has advanced; raise the [`WorldSettings`] limit the set flag names. Rejected contact
+    /// settings do not count.
     pub fn is_complete(&self) -> bool {
         !(self.manifold_cache_full || self.body_pair_cache_full || self.contact_constraints_full)
     }

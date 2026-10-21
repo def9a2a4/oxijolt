@@ -98,7 +98,10 @@ changes nothing when it fails, and wakes the body when it succeeds:
 - `move_kinematic_vertex(index, target, dt)` moves a pinned vertex to a target over the next step.
   The velocity it sets stays, as for a kinematic body, until the vertex is moved again or stopped.
 
-`BodyMut::add_force` works on a soft body: Jolt spreads the force over the vertices.
+`BodyMut::add_force` works on a soft body: Jolt spreads the force over the vertices. Jolt clears a
+soft body's force after each collision step, so with `PhysicsWorld::step_with_collision_steps` the
+force acts in the first collision step of the call only, while gravity acts in every one. To apply
+a force in every sub-step, call `step` once per sub-step and add the force before each.
 
 ## What a soft body refuses
 

@@ -46,11 +46,14 @@ what is planned next.
   checked against the build that wrote them ([guide](shape-cooking.md)); meshes and hulls tested
   on real models from open sources ([report](real-meshes.md)).
 - A floating origin (`PhysicsWorld::rebase`) and optional `f64` world positions.
-- Jolt's jobs on Jolt's thread pool or on your own, such as Rayon ([guide](job-system.md)).
+- Jolt's jobs on Jolt's thread pool, on Jolt's single-threaded job system
+  (`WorldSettings::single_threaded`) or on your own, such as Rayon ([guide](job-system.md)).
 - A [comparison with Rapier and Avian](comparison.md) on Rapier's stress scenes: speed at 1 to 16
   threads, quality, determinism and features, with the scripts and raw results.
 - Solver velocity and position steps chosen per world (`WorldSettings::velocity_steps`,
   `position_steps`), within Jolt's limits ([limits](limits.md#solver-step-counts)).
+- Several collision steps in one update (`PhysicsWorld::step_with_collision_steps`, up to
+  `MAX_COLLISION_STEPS`) to sub-step a fast scene ([limits](limits.md#collision-steps)).
 - Debug wireframes as line data (feature `debug-renderer`); nothing is drawn.
 - Optional `glam032` and `mint` features with exact conversions for `Vec3`, `RVec3` and `Quat`.
 - The poses of every awake body in one call, in a deterministic order

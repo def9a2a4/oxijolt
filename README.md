@@ -85,6 +85,7 @@ Everything planned for 1.0 is done; what works today, with links to the guides, 
 - [x] Prebuilt native libraries downloaded by the build script
 - [x] Constraint force readout and breakable constraints
 - [x] Playground: debris that breaks again when it hits the ground
+- [x] Collision sub-steps and a single-threaded job system
 
 ## Status
 
@@ -112,8 +113,12 @@ Everything planned for 1.0 is done; what works today, with links to the guides, 
   [limits](docs/limits.md) shows how the bounds follow from Jolt's arithmetic, and
   [coverage](docs/coverage.md) says which values only tests check and which no bound covers. CI
   also runs every test with Jolt's assertions on.
+- **Precision.** Positions are `f32` by default, and the API accepts them within
+  `limits::MAX_POSITION`, 5 km of the origin. The `double-precision` feature raises that to
+  10 000 km. Or keep the scene near the origin with `PhysicsWorld::rebase`
+  ([limits](docs/limits.md#frame-and-extent), [floating origin](docs/guide.md#floating-origin)).
 - **Determinism.** On one machine the tests get bit-identical results with 1 and 4 worker threads
-  and with caller job systems, under Jolt's conditions (same binary, same calls in the same
+  and with the single-threaded and caller job systems, under Jolt's conditions (same binary, same calls in the same
   order). Across platforms and compilers results agree only with `cross-platform-deterministic`
   ([determinism](docs/determinism.md)).
 - **Threads.** Changing a world takes `&mut`, reading it takes `&`; worlds are `Send` and `Sync`.

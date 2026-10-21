@@ -2,6 +2,32 @@
 
 All notable changes to this fork. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+- `PhysicsWorld::step_with_collision_steps(delta_time, collision_steps)` advances the world by
+  `delta_time` in `collision_steps` collision steps inside one Jolt update, the way to sub-step a
+  fast scene; `step(dt)` is the same call with one collision step. The count is
+  `1..=PhysicsWorld::MAX_COLLISION_STEPS` (4, so that one update fits Jolt's job pool,
+  [limits](docs/limits.md#collision-steps)); outside it the call returns the new
+  `StepError::InvalidValue`. `StepError::InvalidDeltaTime` now also covers a collision step
+  shorter than `MIN_DELTA_TIME`. The determinism gates run stacks, a fleet and the event scene
+  with 4 collision steps per call.
+- `WorldSettings::single_threaded` runs a world's jobs on Jolt's `JobSystemSingleThreaded`: on the
+  stepping thread, with concurrency 1, without threads. The determinism gates compare it bit for
+  bit with Jolt's thread pool.
+- The joltc extension adds `JPH_JobSystemSingleThreaded_Create`. `JOLTC_EXT_REVISION` is 23: a
+  `JOLTC_LIB_DIR` prefix built before this change is refused, the 1.1.0 release archives no longer
+  match and the build falls back to source until the next release, and shape binary states saved
+  by an earlier build are refused with `BinaryStateError::OtherBuild`; save them again.
+- Constraint impulse readouts and `BodyMut::add_force` say how collision steps change them: a
+  readout is the last collision step's (divide by `delta_time / collision_steps`), a rigid body's
+  force acts over the whole call and a soft body's only in the first collision step
+  ([docs/constraints.md](docs/constraints.md#breakable-constraints)).
+- Docs: `WorldSettings::max_bodies` says that `max_body_pairs` and `max_contact_constraints` do not
+  grow with it; `StepReport::is_complete` says that an incomplete step leaves a valid world and
+  names the limit to raise; the README notes `f32` positions, `double-precision` and the floating
+  origin.
+
 ## 1.1.0 — 2026-10-11
 
 - Prebuilt native libraries: on `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` the build
