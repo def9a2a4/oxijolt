@@ -15,7 +15,13 @@ All notable changes to this fork. The format follows [Keep a Changelog](https://
 - `WorldSettings::single_threaded` runs a world's jobs on Jolt's `JobSystemSingleThreaded`: on the
   stepping thread, with concurrency 1, without threads. The determinism gates compare it bit for
   bit with Jolt's thread pool.
-- The joltc extension adds `JPH_JobSystemSingleThreaded_Create`. `JOLTC_EXT_REVISION` is 23: a
+- A vehicle's gravity override (`VehicleMut::set_gravity`) acts once per collision step. Jolt's
+  `VehicleConstraint` adds the override force in every collision step, and the force accumulator
+  clears only after the last one, so with several collision steps the override would grow step by
+  step; vehicles now run on the extension's `JPH_VehicleStepListener`, which keeps it to one force.
+  With one collision step nothing changes.
+- The joltc extension adds `JPH_JobSystemSingleThreaded_Create` and `JPH_VehicleStepListener_Create`,
+  `_Destroy` and `_AsPhysicsStepListener`. `JOLTC_EXT_REVISION` is 24: a
   `JOLTC_LIB_DIR` prefix built before this change is refused, the 1.1.0 release archives no longer
   match and the build falls back to source until the next release, and shape binary states saved
   by an earlier build are refused with `BinaryStateError::OtherBuild`; save them again.

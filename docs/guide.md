@@ -669,7 +669,8 @@ follows holds for every kind unless it names the wheeled settings.
 - **Gravity.** For gravity the game applies itself (radial on a planet), create the chassis with
   `gravity_factor(0.0)` and `allow_sleeping(false)`, and call `VehicleMut::set_gravity` with the
   gravity at the car before every step. Jolt then adds that gravity times the chassis mass as a
-  force on every step while the chassis is awake; a sleeping chassis gets nothing. The opposite of
+  force on every step while the chassis is awake, once per collision step with
+  `step_with_collision_steps`, as world gravity acts; a sleeping chassis gets nothing. The opposite of
   that gravity is also the up of the pitch and roll limit (`WheeledVehicleSettings::max_pitch_roll_angle`).
 - **Driving.** `set_driver_input(DriverInput { forward, right, brake, hand_brake })`: forward and
   right in `[-1, 1]`, the brakes in `[0, 1]`. Right 1 steers fully right, which Jolt reports as a

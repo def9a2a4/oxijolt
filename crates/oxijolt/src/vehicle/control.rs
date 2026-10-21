@@ -142,8 +142,10 @@ impl<K: VehicleKind> VehicleMut<'_, K> {
     ///
     /// On every step while the chassis is awake, Jolt sets the chassis' gravity factor to 0 and
     /// adds the force `gravity / inverse mass` at its centre of mass; a sleeping chassis gets no
-    /// force. The opposite of `gravity` also becomes the world up of the pitch and roll limit;
-    /// a zero `gravity` keeps the last world up, which a restore does not undo (see
+    /// force. With [`step_with_collision_steps`](crate::PhysicsWorld::step_with_collision_steps)
+    /// the force acts once in every collision step, like world gravity and on top of the forces
+    /// the caller added. The opposite of `gravity` also becomes the world up of the pitch and
+    /// roll limit; a zero `gravity` keeps the last world up, which a restore does not undo (see
     /// [`WorldState`](crate::WorldState)).
     /// The override stays until it is set again; there is no reset, because Jolt's reset writes
     /// gravity factor 1 to the chassis. For radial gravity, set it every tick.

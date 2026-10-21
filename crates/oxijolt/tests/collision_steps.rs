@@ -1,6 +1,6 @@
 //! Steps split into several collision steps: the bounds on the count and on each collision step's
 //! length, that the count reaches Jolt and covers the whole `delta_time`, how forces clear, and
-//! the single event batch of a call.
+//! the single event batch of a call, and a vehicle's gravity override in every collision step.
 
 mod common;
 
@@ -226,6 +226,108 @@ fn a_rigid_force_acts_over_all_collision_steps_and_clears_after_the_call() {
         .unwrap()
         .is_complete());
     assert_eq!(world.body(cube).unwrap().linear_velocity(), velocity);
+}
+
+/// A 1500 kg wheeled vehicle without damping or ground, at rest at the origin (where `f32`
+/// positions resolve its millimetre fall), under `GRAVITY` either as world gravity or as the
+/// vehicle's override (world gravity zero), with a caller force on the chassis, after one call
+/// of `collision_steps` collision steps on `settings`' job system. Returns the chassis' x and y
+/// position and velocity.
+fn falling_vehicle(
+    settings: WorldSettings,
+    collision_steps: u32,
+    gravity_override: bool,
+    force: Vec3,
+) -> ([f64; 2], [f64; 2]) {
+    let world_gravity = if gravity_override {
+        NO_GRAVITY
+    } else {
+        GRAVITY
+    };
+    let mut world = PhysicsWorld::new(settings.gravity(world_gravity)).unwrap();
+    let shape = Shape::new_box(Vec3::new(0.9, 0.3, 2.0)).unwrap();
+    let body_settings = BodySettings::new_dynamic()
+        .mass(1500.0)
+        .linear_damping(0.0)
+        .angular_damping(0.0)
+        .allow_sleeping(false);
+    let chassis = world.create_body(&shape, &body_settings).unwrap();
+    let wheels = [(-0.9, -1.4), (0.9, -1.4), (-0.9, 1.4), (0.9, 1.4)]
+        .into_iter()
+        .map(|(x, z)| WheelSettings::new(Vec3::new(x, -0.1, z)))
+        .collect();
+    let car_settings = WheeledVehicleSettings::new(
+        wheels,
+        vec![VehicleDifferentialSettings::new(Some(0), Some(1))],
+        VehicleCollisionTester::ray(ObjectLayer::MOVING),
+    );
+    let car = world
+        .create_wheeled_vehicle(chassis, &car_settings)
+        .unwrap();
+    if gravity_override {
+        world
+            .vehicle_mut(car)
+            .unwrap()
+            .set_gravity(GRAVITY)
+            .unwrap();
+    }
+    world.body_mut(chassis).unwrap().add_force(force).unwrap();
+    assert!(world
+        .step_with_collision_steps(DT, collision_steps)
+        .unwrap()
+        .is_complete());
+    let body = world.body(chassis).unwrap();
+    let (position, velocity) = (body.position(), body.linear_velocity());
+    (
+        [wide(position.x), wide(position.y)],
+        [f64::from(velocity.x), f64::from(velocity.y)],
+    )
+}
+
+#[test]
+fn a_vehicle_gravity_override_acts_like_world_gravity_in_every_collision_step() {
+    // 2 m/s² sideways and 1 m/s² up on 1500 kg, so the override must keep the caller's force.
+    let force = Vec3::new(3000.0, 1500.0, 0.0);
+    let acceleration = [2.0, -9.81 + 1.0];
+    for settings in [
+        WorldSettings::default().worker_threads(4),
+        WorldSettings::default().single_threaded(),
+    ] {
+        for count in 1..=MAX {
+            let what = format!("{count} collision steps, {settings:?}");
+            let (moved, velocity) = falling_vehicle(settings.clone(), count, true, force);
+            let (control_moved, control_velocity) =
+                falling_vehicle(settings.clone(), count, false, force);
+            // The semi-implicit Euler fall of `the_collision_step_count_reaches_jolt`.
+            let (dt, n) = (f64::from(DT), f64::from(count));
+            for (axis, a) in [(0, acceleration[0]), (1, acceleration[1])] {
+                let expected_velocity = a * dt;
+                let expected_moved = a * dt * dt * (n + 1.0) / (2.0 * n);
+                for (actual, expected, part) in [
+                    (velocity[axis], expected_velocity, "velocity"),
+                    (
+                        control_velocity[axis],
+                        expected_velocity,
+                        "world gravity velocity",
+                    ),
+                    (moved[axis], expected_moved, "displacement"),
+                    (
+                        control_moved[axis],
+                        expected_moved,
+                        "world gravity displacement",
+                    ),
+                ] {
+                    assert_relative(actual, expected, 1e-4, &format!("{what}: {part} {axis}"));
+                }
+                assert_relative(
+                    velocity[axis],
+                    control_velocity[axis],
+                    1e-6,
+                    &format!("{what}: override against world gravity, axis {axis}"),
+                );
+            }
+        }
+    }
 }
 
 #[test]
