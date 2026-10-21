@@ -1301,8 +1301,9 @@ const CARRIER: usize = OPEN_CARS + SLAB_CARS;
 const PARKED_CAR: usize = CARRIER + 1;
 const SEAM_CARS: [usize; 2] = [CARRIER + 2, CARRIER + 3];
 /// Ticks on which each left seam wheel must stand across the seam on each of the two seam
-/// boxes.
-const MIN_SEAM_BOX_TICKS: usize = FLEET_TICKS / 10;
+/// boxes. Which box wins depends on hits a few ulps apart, so the split differs between
+/// precisions and compilers (17 of 300 ticks on one box in a Windows double-precision build).
+const MIN_SEAM_BOX_TICKS: usize = FLEET_TICKS / 30;
 /// x of the seam between the two boxes the seam cars drive on.
 const SEAM_X: f32 = -80.0;
 /// Convex radius of the cylinder tester of the seam cars: Jolt's default fraction 0.1 of
