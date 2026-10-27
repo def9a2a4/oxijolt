@@ -11,7 +11,7 @@ Rust bindings are committed, so no build needs LLVM.
 - Rust 1.88 or newer (the `rust-version` of both crates, checked in CI). Raising it is a
   minor release, noted in the changelog.
 - The platform linker Rust needs anyway: the MSVC Build Tools on Windows, `cc` and `libstdc++` on
-  Linux.
+  Linux, the Xcode Command Line Tools on macOS.
 - For the download: `curl`. Windows 10 (1803 and later) ships it in `System32`, which is found
   without the `PATH`; on Linux it has to be on the `PATH`, as it is on most systems.
 - For the source build only: a C++ toolchain (MSVC on Windows, GCC or Clang elsewhere) and CMake
@@ -187,7 +187,8 @@ configuration. The supported targets are those with committed bindings (`build/t
 | `gnu` | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-linux-android`, `aarch64-linux-android`, `x86_64-pc-windows-gnu` |
 
 32-bit targets and unregistered ones are refused when the build starts. CI builds and tests
-`x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu`; the other targets have bindings that the
+`x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin` (from source: no
+release archive exists for macOS); the other targets have bindings that the
 generator produced byte-identical to their family's, but nothing builds or tests them. Android cross
 builds go through the NDK's CMake toolchain (`ANDROID_NDK_HOME`).
 

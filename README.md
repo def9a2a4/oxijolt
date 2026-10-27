@@ -80,7 +80,8 @@ Everything planned for 1.0 is done; what works today, with links to the guides, 
 - [x] Comparison with Rapier and Avian
 - [x] Solver step counts per world
 - [ ] Bevy plugin, in a separate repository
-- [ ] macOS in CI and in releases
+- [x] macOS (Apple silicon) in CI
+- [ ] macOS in releases
 - [ ] Same results across operating systems, checked in CI
 - [x] Prebuilt native libraries downloaded by the build script
 - [x] Constraint force readout and breakable constraints
@@ -91,10 +92,10 @@ Everything planned for 1.0 is done; what works today, with links to the guides, 
 
 - Version 1.2.0 on [crates.io](https://crates.io/crates/oxijolt). The API follows semantic
   versioning from 1.0: a breaking change waits for the next major version.
-- CI builds and tests Windows (MSVC) and Linux (GCC) on x86_64, each in five configurations:
-  default, `cross-platform-deterministic`, `double-precision`, `debug-renderer` and `asserts`.
-  The bindings are committed for 64-bit Windows, Linux, macOS and Android targets; only the two
-  CI targets are tested.
+- CI builds and tests Windows (MSVC) and Linux (GCC) on x86_64 and macOS (Apple clang) on Apple
+  silicon, each in five configurations: default, `cross-platform-deterministic`,
+  `double-precision`, `debug-renderer` and `asserts`. The bindings are committed for 64-bit
+  Windows, Linux, macOS and Android targets; only the three CI targets are tested.
 - Rust 1.88 or newer (checked in CI). The public API follows the rules in
   [docs/api-guidelines.md](docs/api-guidelines.md).
 - Jolt and joltc come prebuilt on x86_64 Windows (MSVC) and Linux (GNU): the build script
