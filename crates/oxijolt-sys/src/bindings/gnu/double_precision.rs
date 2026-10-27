@@ -10648,6 +10648,55 @@ unsafe extern "C" {
     ) -> bool;
 }
 unsafe extern "C" {
+    pub fn JPH_WheeledVehicleController_SetEngine(
+        controller: *mut JPH_WheeledVehicleController,
+        settings: *const JPH_VehicleEngineSettings,
+    );
+}
+unsafe extern "C" {
+    pub fn JPH_TrackedVehicleController_SetEngine(
+        controller: *mut JPH_TrackedVehicleController,
+        settings: *const JPH_VehicleEngineSettings,
+    );
+}
+unsafe extern "C" {
+    pub fn JPH_WheeledVehicleController_SetTransmission(
+        controller: *mut JPH_WheeledVehicleController,
+        settings: *const JPH_VehicleTransmissionSettings,
+    ) -> bool;
+}
+unsafe extern "C" {
+    pub fn JPH_TrackedVehicleController_SetTransmission(
+        controller: *mut JPH_TrackedVehicleController,
+        settings: *const JPH_VehicleTransmissionSettings,
+    ) -> bool;
+}
+unsafe extern "C" {
+    pub fn JPH_WheeledVehicleController_SetDifferentials(
+        controller: *mut JPH_WheeledVehicleController,
+        values: *const JPH_VehicleDifferentialSettings,
+        count: u32,
+    );
+}
+unsafe extern "C" {
+    pub fn JPH_WheeledVehicleController_SetDifferentialLimitedSlipRatio(
+        controller: *mut JPH_WheeledVehicleController,
+        value: f32,
+    );
+}
+unsafe extern "C" {
+    pub fn JPH_TrackedVehicleController_SetTrack(
+        controller: *mut JPH_TrackedVehicleController,
+        side: JPH_TrackSide,
+        track: *const JPH_VehicleTrackSettings,
+    ) -> bool;
+}
+unsafe extern "C" {
+    pub fn JPH_WheeledVehicleController_ResetTireMaxImpulseCallback(
+        controller: *mut JPH_WheeledVehicleController,
+    );
+}
+unsafe extern "C" {
     pub fn JPH_RagdollSettings_SetPart(
         settings: *mut JPH_RagdollSettings,
         partIndex: ::std::os::raw::c_int,

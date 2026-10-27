@@ -10,6 +10,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 use oxijolt_sys::*;
 
+pub mod vehicle;
+
 pub const OL_NON_MOVING: JPH_ObjectLayer = 0;
 pub const OL_MOVING: JPH_ObjectLayer = 1;
 const OBJECT_LAYER_COUNT: u32 = 2;
