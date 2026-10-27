@@ -164,9 +164,11 @@ fn install_tester(entry: &mut VehicleEntry, tester: VehicleCollisionTester) {
 impl PhysicsWorld {
     /// Attaches a wheeled vehicle to the dynamic body `body`, its chassis, and returns its id.
     ///
-    /// The chassis' shape gives the vehicle its mass and centre of mass; a low centre of mass
-    /// ([`Shape::new_offset_center_of_mass`](crate::Shape::new_offset_center_of_mass)) keeps it
-    /// from rolling over.
+    /// The chassis' shape gives the vehicle its centre of mass, and its mass and inertia unless
+    /// [`BodySettings::mass`](crate::BodySettings::mass) or
+    /// [`mass_and_inertia`](crate::BodySettings::mass_and_inertia) overrides them. A low centre
+    /// of mass ([`Shape::new_offset_center_of_mass`](crate::Shape::new_offset_center_of_mass))
+    /// keeps it from rolling over.
     ///
     /// # Vehicles and the step
     /// From now on the vehicle runs inside every [`step`](Self::step), as a constraint and a

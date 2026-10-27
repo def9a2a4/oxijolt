@@ -11,7 +11,7 @@ chassis. oxijolt has three kinds, one per Jolt controller:
 
 The [guide](guide.md#vehicles) describes the wheeled vehicle and what all kinds share: the chassis,
 the collision testers, gravity set by the caller, and the wheel readout. This page adds the tank and
-the motorcycle.
+the motorcycle, and how to tune a vehicle while it drives.
 
 ## Ids
 
@@ -178,10 +178,121 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   state can replay differently (it did with 200 in a probe); `create_motorcycle` refuses it with
   `VehicleError::LeanSpringIntegrationNotSaved`.
 
+## Tuning a vehicle while it drives
+
+A vehicle's drivetrain can change after creation; the next step uses the new settings.
+
+| What | Kinds | Read with `VehicleRef` | Change with `VehicleMut` |
+|---|---|---|---|
+| Engine | all | `engine_settings` | `set_engine` |
+| Transmission | all | `transmission_settings` | `set_transmission` |
+| Differentials and the limited slip ratio between them | wheeled, motorcycle | `differentials`, `differential_limited_slip_ratio` | `set_differentials` |
+| Both tracks | tracked | `track_settings(side)` | `set_tracks(left, right)` |
+| Tire max impulse | wheeled, motorcycle | `has_tire_max_impulse_callback` | `set_tire_max_impulse_callback`, `clear_tire_max_impulse_callback` |
+
+Each setter checks the vehicle as its creator would, with the new value in place of the old one:
+against the wheels, the rest of the drivetrain and the current collision tester, and for a tank
+also against its chassis (`limits::MAX_TRACK_MASS_RATIO`). A refused change returns `Err` and
+changes nothing. What the vehicle is doing carries over: the engine's rpm (Jolt clamps it into a
+new rpm range before using it), the gear, the clutch and the shift timers, the track speeds.
+
+Some values stay as created, and a change of them is refused with `VehicleError::FixedAtCreation`:
+- the number of forward and reverse gears and the clutch release time. Jolt's state saves the
+  current gear and the clutch release countdown, but not the ratios or the release time they are
+  read against;
+- a track's wheels and its driven wheel, which Jolt reads on every step.
+
+Wheels have no setters: Jolt hands out their settings read-only.
+
+A tank's tracks have no speed limit in Jolt, so the [track drive envelope](limits.md#track-drive-envelope)
+also covers the track speeds that earlier configurations allowed ([live changes](limits.md#live-changes)):
+after fast driving, a change that would be accepted from rest can be refused.
+
+None of these settings is part of a `WorldState`: `restore_state` keeps the current ones. A
+rollback that should replay a change makes it again ([state](state.md#what-is-not-saved)).
+
+### Tire grip
+
+Without a callback, Jolt caps the impulse each tire can put on the ground in a collision step at
+its friction times the suspension impulse, along and across the wheel.
+`set_tire_max_impulse_callback` replaces that formula for one wheeled vehicle or motorcycle. The
+closure gets a `TireMaxImpulseInput` (wheel index, suspension impulse, both friction coefficients,
+both slips, the collision step's length) and returns a `TireMaxImpulse` of two caps in N·s;
+`input.default_max_impulse()` is Jolt's formula. NaN and negative caps count as 0, and
+`f32::INFINITY` is no cap.
+
+- **Threads.** The solver calls the closure for each wheel with ground contact in every velocity
+  iteration it runs, on its worker threads, concurrently with other vehicles' callbacks but never
+  with another call of the same vehicle. The closure is `Fn + Send + Sync + 'static`. The number
+  of calls is not fixed: the solver stops iterating early when no impulse changes.
+- **Determinism.** For results that do not depend on the thread count, the caps must depend only
+  on the input and on data that does not change during the step: no counters, clocks or state
+  shared between calls. `tests/vehicle_tuning_determinism.rs` checks such callbacks with 1 and 4
+  workers and in two processes.
+- **Panics.** A panic in the closure gives that vehicle Jolt's caps for the rest of the step, and
+  `step` resumes the panic after the update. The world stays usable.
+- **Lifetime.** The closure is dropped when it is replaced or cleared, with its vehicle, or with
+  the world. A restore keeps it and does not rewind what it captured; a rebase keeps it too.
+
+```rust
+use oxijolt::*;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut world = PhysicsWorld::new(WorldSettings::default())?;
+    let floor = Shape::new_box(Vec3::new(100.0, 1.0, 100.0))?;
+    world.create_body(&floor, &BodySettings::new_static().position(RVec3::new(0.0, -1.0, 0.0)))?;
+
+    let hull = Shape::new_box(Vec3::new(0.9, 0.3, 2.0))?;
+    let chassis_shape = Shape::new_offset_center_of_mass(&hull, Vec3::new(0.0, -0.3, 0.0))?;
+    let chassis = world.create_body(
+        &chassis_shape,
+        &BodySettings::new_dynamic()
+            .position(RVec3::new(0.0, 1.0, 0.0))
+            .mass(1500.0)
+            .allow_sleeping(false),
+    )?;
+    let tester = VehicleCollisionTester::cast_sphere(ObjectLayer::MOVING, 0.2);
+    let settings = WheeledVehicleSettings::car(Vec3::new(0.9, -0.1, 1.4), 0.35, tester);
+    let car = world.create_wheeled_vehicle(chassis, &settings)?;
+
+    // A stronger engine and four-wheel drive.
+    let mut vehicle = world.vehicle_mut(car)?;
+    let stronger = VehicleEngineSettings::default().max_torque(800.0);
+    vehicle.set_engine(stronger.clone())?;
+    let axle = |left, right| VehicleDifferentialSettings::new(Some(left), Some(right));
+    let four_wheel_drive =
+        vec![axle(0, 1).engine_torque_ratio(0.5), axle(2, 3).engine_torque_ratio(0.5)];
+    vehicle.set_differentials(four_wheel_drive, 1.4)?;
+
+    // The gear count is fixed at creation.
+    let two_gears = VehicleTransmissionSettings::default().gear_ratios(vec![2.0, 1.0]);
+    assert!(matches!(
+        vehicle.set_transmission(two_gears),
+        Err(VehicleError::FixedAtCreation(_))
+    ));
+
+    // Arcade grip: half again as much sideways grip as Jolt gives.
+    vehicle.set_tire_max_impulse_callback(|input| {
+        let jolt = input.default_max_impulse();
+        TireMaxImpulse { lateral: 1.5 * jolt.lateral, ..jolt }
+    });
+
+    let input = DriverInput { forward: 1.0, ..DriverInput::default() };
+    world.vehicle_mut(car)?.set_driver_input(input)?;
+    for _ in 0..120 {
+        assert!(world.step(1.0 / 60.0)?.is_complete());
+    }
+    assert_eq!(world.vehicle(car)?.engine_settings(), &stronger);
+    assert_eq!(world.vehicle(car)?.differentials().len(), 2);
+    assert!(world.body(chassis)?.position().z > 2.0);
+    Ok(())
+}
+```
+
 ## Rollback and rebase
 
-A `WorldState` holds each vehicle's driver input, drivetrain and wheels, a tank's track speeds and
-a motorcycle's target lean. A tank and a motorcycle replay bit for bit after a restore, from a save
+A `WorldState` holds each vehicle's driver input, the state of its drivetrain (engine rpm, gear,
+clutch) and wheels, a tank's track speeds and a motorcycle's target lean, but not its settings. A tank and a motorcycle replay bit for bit after a restore, from a save
 before their first contact, in a turn and during a gear shift (`tests/vehicle_kinds_state.rs`). As
 for wheeled vehicles, the world up is not saved: after a restore in zero gravity a vehicle keeps
 the world up of the abandoned run, and a motorcycle uses it for its target lean even with the

@@ -1011,8 +1011,8 @@ itself: those ranges keep its inputs physical.
 
 ### Live changes
 
-`VehicleMut::set_engine` and `set_transmission` change the drivetrain of a tracked vehicle that is
-already moving, and Jolt never clamps a track's speed. After a change the tracks do not start at
+`VehicleMut::set_engine`, `set_transmission` and `set_tracks` change the drivetrain of a tracked
+vehicle that is already moving, and Jolt never clamps a track's speed. After a change the tracks do not start at
 rest. The vehicle keeps two bounds over every configuration it had: each track's largest speed
 `Ω_old,i`, and the largest weighted speed `β_old`, measured with the inertias `I_old,i` of the
 configuration before. With the new inertias `I_i` the weighted speed then starts at most at
@@ -1075,8 +1075,9 @@ synchronisation and the friction limit move that onset, so the bound is measured
 
 `PhysicsWorld::create_tracked_vehicle` computes `M·w` for every wheel in `f64` from the chassis'
 inverse mass, principal inverse inertia, inertia rotation and centre of mass, and refuses the
-vehicle when any wheel's exceeds `MAX_TRACK_MASS_RATIO` (0.25). `w` is the largest the wheel can
-give:
+vehicle when any wheel's exceeds `MAX_TRACK_MASS_RATIO` (0.25). `VehicleMut::set_tracks` checks
+new tracks the same way, with the chassis' mass properties of creation: a chassis cannot change
+its shape or motion type while a vehicle uses it. `w` is the largest the wheel can give:
 - `d` is any direction in the wheel's forward/up plane. Jolt's longitudinal direction is the
   ground normal crossed with the wheel's right (`VehicleConstraint.cpp:254-271`), so it lies in
   that plane: along the wheel's forward on ground perpendicular to the wheel's up, turned toward

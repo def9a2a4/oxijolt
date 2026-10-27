@@ -59,7 +59,8 @@ projectile that passes its shooter), a `ContactListener` validates contacts
   exactly diagonal (a rotated compound child, an offset centre of mass), a slender part is refused
   past about 54 times longer than wide for a square box and about 47 times longer than its
   diameter for a capsule or cylinder ([limits.md](limits.md#rigid-body-inertia)). A shape with an
-  exactly diagonal tensor, such as an unrotated primitive, is not affected.
+  exactly diagonal tensor, such as an unrotated primitive, is not affected. An inertia given with
+  `BodySettings::mass_and_inertia` has rules of its own ([bodies](bodies.md#mass-and-inertia)).
 
 A `Shape` holds one Jolt reference and every body holds its own, so a shape can be dropped after
 creating bodies and shared between bodies and worlds.
@@ -649,7 +650,8 @@ gravity is applied, then engine, brakes and tire friction act through the constr
 vehicles and motorcycles work the same way and have [a guide of their own](vehicles.md); what
 follows holds for every kind unless it names the wheeled settings.
 
-- **Chassis.** The chassis shape gives the vehicle its mass and centre of mass.
+- **Chassis.** The chassis shape gives the vehicle its centre of mass, and its mass and inertia
+  unless `BodySettings::mass` or `mass_and_inertia` overrides them ([bodies](bodies.md#mass-and-inertia)).
   `Shape::new_offset_center_of_mass` moves only the centre of mass, not the collision surface, so a
   box hull can carry a low centre of mass that keeps the car from rolling over. `remove_body`
   refuses a chassis while its vehicle exists; call `remove_vehicle` first.
