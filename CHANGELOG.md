@@ -15,6 +15,9 @@ All notable changes to this fork. The format follows [Keep a Changelog](https://
   five configurations as Windows and Linux, together with the playground and the real-mesh
   checks. macOS still builds Jolt from source: the releases carry no macOS archive. The engine
   comparison stays on Windows and Linux, where its harness reads CPU time and memory.
+- The published `oxijolt` package leaves out the tests that build only inside the repository
+  (the real-mesh checks and the character study), so `cargo test --no-run` builds the tests of
+  the unpacked crate. The tests still run in the repository and in CI.
 
 ## 1.2.0 — 2026-10-21
 
