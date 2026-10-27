@@ -832,21 +832,21 @@ Checked on 2026-10-07 against oxijolt at this commit, rapier3d 0.36.0 (tag `v0.3
 | Double precision | `f64` world positions (`double-precision`, [features](features.md)) | the `rapier3d-f64` crate ([manifest](https://github.com/dimforge/rapier/blob/v0.36.0/crates/rapier3d-f64/Cargo.toml)) | `f64` feature ([manifest](https://github.com/avianphysics/avian/blob/v0.7.0/crates/avian3d/Cargo.toml#L28)) |
 | WASM | not a target of this binding ([targets](../crates/oxijolt-sys/build/targets.rs)); Jolt itself builds for WASM ([JoltPhysics.js](https://github.com/jrouwe/JoltPhysics.js)) | yes, `wasm32-wasip1` in its CI test ([test](https://github.com/dimforge/rapier/blob/v0.36.0/crates/rapier3d/tests/snapshot_portability.rs#L11-L13)) and JavaScript bindings ([bindings](https://github.com/dimforge/rapier/tree/v0.36.0/bindings/typescript)) | through Bevy, which supports WASM ([Bevy](https://github.com/bevyengine/bevy/tree/v0.19.0/examples#wasm)); no WASM job in Avian's CI ([ci.yml](https://github.com/avianphysics/avian/blob/v0.7.0/.github/workflows/ci.yml)) |
 | Language | Rust over C++ (Jolt and joltc) ([lineage](../LINEAGE.md)) | pure Rust ([manifest](https://github.com/dimforge/rapier/blob/v0.36.0/crates/rapier3d/Cargo.toml)) | pure Rust ([manifest](https://github.com/avianphysics/avian/blob/v0.7.0/crates/avian3d/Cargo.toml)) |
-| Build requirements | on x86_64 Windows and Linux a verified prebuilt download; elsewhere a C++ toolchain and CMake 3.20 ([building](building.md)) | Rust only ([manifest](https://github.com/dimforge/rapier/blob/v0.36.0/crates/rapier3d/Cargo.toml)) | Rust only ([manifest](https://github.com/avianphysics/avian/blob/v0.7.0/crates/avian3d/Cargo.toml)) |
+| Build requirements | on x86_64 Windows and Linux and on Apple silicon a verified prebuilt download; elsewhere a C++ toolchain and CMake 3.20 ([building](building.md)) | Rust only ([manifest](https://github.com/dimforge/rapier/blob/v0.36.0/crates/rapier3d/Cargo.toml)) | Rust only ([manifest](https://github.com/avianphysics/avian/blob/v0.7.0/crates/avian3d/Cargo.toml)) |
 | Needs Bevy | no ([manifest](../crates/oxijolt/Cargo.toml)) | no; `bevy_rapier` is separate ([bindings](https://github.com/dimforge/rapier/tree/v0.36.0/bindings/bevy_rapier)) | yes ([manifest](https://github.com/avianphysics/avian/blob/v0.7.0/crates/avian3d/Cargo.toml#L80-L85)) |
 | Minimum Rust | 1.88 ([manifest](../crates/oxijolt/Cargo.toml)) | 1.86 ([manifest](https://github.com/dimforge/rapier/blob/v0.36.0/Cargo.toml#L67)) | not declared; its Bevy 0.19.1 (the version this comparison's lockfile resolves) needs 1.95 ([Bevy manifest](https://github.com/bevyengine/bevy/blob/v0.19.1/Cargo.toml#L13)) |
 | Licence | MIT or Apache-2.0; Jolt and joltc MIT ([lineage](../LINEAGE.md)) | Apache-2.0 ([manifest](https://github.com/dimforge/rapier/blob/v0.36.0/Cargo.toml#L66)) | MIT or Apache-2.0 ([manifest](https://github.com/avianphysics/avian/blob/v0.7.0/crates/avian3d/Cargo.toml#L5)) |
 
 ## Where oxijolt loses
 
-- **A C++ toolchain and CMake** outside x86_64 Windows and Linux, and for any build no release
-  archive fits: oxijolt then compiles Jolt and joltc with MSVC, GCC or Clang through CMake
-  ([building](building.md)). Rapier and Avian are pure Rust.
+- **A C++ toolchain and CMake** outside x86_64 Windows and Linux and Apple silicon, and for any
+  build no release archive fits: oxijolt then compiles Jolt and joltc with MSVC, GCC or Clang
+  through CMake ([building](building.md)). Rapier and Avian are pure Rust.
 - **No WASM.** This binding has no WebAssembly target ([targets](../crates/oxijolt-sys/build/targets.rs)),
   although Jolt itself builds for it. Rapier runs a WASM test in CI and has JavaScript bindings.
-- **macOS** is built and tested in CI on Apple silicon, from source: the releases carry no macOS
-  archive ([roadmap](../README.md#roadmap)). This comparison runs on Windows and Linux only: its
-  harness reads CPU time and memory from those two systems.
+- **macOS** comes prebuilt and is tested in CI on Apple silicon only; Intel Macs build from
+  source. This comparison runs on Windows and Linux only: its harness reads CPU time and memory
+  from those two systems.
 - **Same results across operating systems** are an opt-in feature that CI does not check yet;
   Rapier tests a snapshot on native and WASM targets.
 - **Save and restore** covers the same world with an unchanged structure only ([state](state.md)).

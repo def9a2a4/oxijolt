@@ -1,8 +1,8 @@
 # Building
 
-`oxijolt-sys` links joltc and Jolt Physics statically. On x86_64 Windows (MSVC) and x86_64 Linux
-(GNU) its build script downloads them prebuilt from the GitHub release of the crate's version and
-checks them against a sha256 packaged in the crate. Everywhere else, and whenever an archive does
+`oxijolt-sys` links joltc and Jolt Physics statically. On x86_64 Windows (MSVC), x86_64 Linux
+(GNU) and macOS on Apple silicon its build script downloads them prebuilt from the GitHub release
+of the crate's version and checks them against a sha256 packaged in the crate. Everywhere else, and whenever an archive does
 not fit the build, it compiles them from the pinned submodules with CMake, always in Release. The
 Rust bindings are committed, so no build needs LLVM.
 
@@ -13,7 +13,8 @@ Rust bindings are committed, so no build needs LLVM.
 - The platform linker Rust needs anyway: the MSVC Build Tools on Windows, `cc` and `libstdc++` on
   Linux, the Xcode Command Line Tools on macOS.
 - For the download: `curl`. Windows 10 (1803 and later) ships it in `System32`, which is found
-  without the `PATH`; on Linux it has to be on the `PATH`, as it is on most systems.
+  without the `PATH`; macOS ships it; on Linux it has to be on the `PATH`, as it is on most
+  systems.
 - For the source build only: a C++ toolchain (MSVC on Windows, GCC or Clang elsewhere) and CMake
   3.20 or newer.
 
@@ -73,9 +74,9 @@ these hold:
 
 - the list is for this crate version (build metadata such as `+jolt-5.6.0` aside);
 - it has an archive for the target, the C runtime and the crate features. Releases have one for
-  `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` with each of the eight subsets of
-  `double-precision`, `cross-platform-deterministic` and `debug-renderer`; `asserts` and other
-  targets build from source;
+  `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin` with each of
+  the eight subsets of `double-precision`, `cross-platform-deterministic` and `debug-renderer`;
+  `asserts` and other targets build from source;
 - the crate's native sources (`native/`, `build.rs`, `build/cmake_options.rs` and the joltc and
   Jolt sources CMake reads) give the list's fingerprint, so a build with changed native sources
   does not link an archive built from other code;
@@ -83,7 +84,9 @@ these hold:
   uses (found as the `cc` crate finds it, or `RUSTC_LINKER` when that is a `link.exe`) is of the
   archive's toolset or newer;
 - on Linux: a native build (host equals target), no linker or sysroot override, and the host's
-  glibc (`getconf GNU_LIBC_VERSION`) is the archive's or newer.
+  glibc (`getconf GNU_LIBC_VERSION`) is the archive's or newer;
+- on macOS: the deployment target rustc links for (`rustc --print deployment-target`, which
+  honours `MACOSX_DEPLOYMENT_TARGET`; 11.0 by default on Apple silicon) is the archive's or newer.
 
 The archive is then fetched with `curl` from `<release URL>/<name>.tar.gz`, checked against the
 list's sha256, unpacked into `OUT_DIR/prebuilt/<name>` and validated like a `JOLTC_LIB_DIR`
@@ -163,9 +166,10 @@ The warning (or the `require` error) ends with one of these reasons:
 | native sources missing or not regular files | `git submodule update --init` |
 | no archive for this target, CRT and features | another target or `asserts`: the source build is the only way |
 | crt-static is enabled; the archives use /MD | use the dynamic runtime, or build from source |
-| a linker or sysroot override is set; a cross build | link with the default linker on the target itself, or build from source |
+| a linker or sysroot override is set; a cross build (Windows and Linux) | link with the default linker on the target itself, or build from source |
 | MSVC toolset X is older than the archive's Y, or unknown | update Visual Studio (Build Tools) 2022 to its latest release, or build from source |
 | glibc X is older than the archive's Y, or unknown | a newer distribution, or build from source |
+| macOS deployment target X is older than the archive's Y, or unknown | unset or raise `MACOSX_DEPLOYMENT_TARGET`, or build from source |
 | curl was not found | install `curl`, or build from source |
 | download failed, checksum mismatch, cannot unpack the archive | check the network, proxy or `JOLTC_PREBUILT_URL`; a checksum mismatch means the served file is not the released one |
 | the archive was refused | the unpacked prefix failed the manifest check (report it), or `vendor/joltc` is missing (`git submodule update --init`) |
@@ -187,9 +191,9 @@ configuration. The supported targets are those with committed bindings (`build/t
 | `gnu` | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-linux-android`, `aarch64-linux-android`, `x86_64-pc-windows-gnu` |
 
 32-bit targets and unregistered ones are refused when the build starts. CI builds and tests
-`x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin` (from source: no
-release archive exists for macOS); the other targets have bindings that the
-generator produced byte-identical to their family's, but nothing builds or tests them. Android cross
+`x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`; the other
+targets have bindings that the generator produced byte-identical to their family's, but nothing
+builds or tests them. Android cross
 builds go through the NDK's CMake toolchain (`ANDROID_NDK_HOME`).
 
 On Windows the native libraries use the same C runtime as the Rust target: the dynamic one (`/MD`)
@@ -241,12 +245,15 @@ features joined by `+`), with a `.sha256` file each:
   `crt-static`;
 - Linux archives are built with GCC 12 in an `ubuntu:22.04` container and need glibc 2.35 or newer
   and a compatible libstdc++ at run time;
-- the CPU needs AVX2, BMI1, LZCNT, POPCNT and F16C; builds without `cross-platform-deterministic`
-  also use FMA;
+- macOS archives are built for Apple silicon (arm64 only) on the `macos-15` runner with its Xcode
+  (the versions are in `PROVENANCE.txt`) for macOS 11.0 or newer; the release checks that every
+  object in them has that minimum. Intel Macs build from source;
+- on x86_64 the CPU needs AVX2, BMI1, LZCNT, POPCNT and F16C; builds without
+  `cross-platform-deterministic` also use FMA. Apple silicon archives use no extra CPU features;
 - Jolt's assertions are off.
 
 Each archive holds `lib/`, `include/`, the manifest, `PROVENANCE.txt` (compiler, options and
-source commit), and the licences of oxijolt, joltc and Jolt. The build script uses them on its own;
+source commit; on Linux the glibc, on macOS the Xcode, SDK and minimum macOS), and the licences of oxijolt, joltc and Jolt. The build script uses them on its own;
 to link one by hand, unpack it and point `JOLTC_LIB_DIR` at its directory.
 
 ## Releases
@@ -254,13 +261,14 @@ to link one by hand, unpack it and point `JOLTC_LIB_DIR` at its directory.
 A maintainer bumps the version of both crates, commits, and pushes the tag `v<version>`. The
 `Release` workflow then:
 
-1. builds the 16 archives from the tagged commit, each with its smoke test;
+1. builds the 24 archives from the tagged commit, each with its smoke test;
 2. writes their list into `crates/oxijolt-sys/prebuilt.txt` as one commit on top of the tag, and
-   checks that both packaged crates build from the archives (served locally) without CMake;
+   checks on Linux and macOS that both packaged crates build from the archives (served locally)
+   without CMake;
 3. attaches the archives to the tag's GitHub release;
 4. pushes that commit to the branch `release/v<version>`;
 5. publishes both crates to crates.io from it (`Publish to crates.io`), after checking every public
-   asset against the list and building the packages from the real download.
+   asset against the list and building the packages from the real download on Linux and macOS.
 
 CI never writes `main`: the maintainer merges `release/v<version>` into `main` by hand, after which
 git dependencies on `main` download too.

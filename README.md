@@ -82,7 +82,7 @@ Everything planned for 1.0 is done; what works today, with links to the guides, 
 - [x] Contact tuning per world (penetration slop, speculative contact distance)
 - [ ] Bevy plugin, in a separate repository
 - [x] macOS (Apple silicon) in CI
-- [ ] macOS in releases
+- [x] macOS (Apple silicon) in releases
 - [ ] Same results across operating systems, checked in CI
 - [x] Prebuilt native libraries downloaded by the build script
 - [x] Constraint force readout and breakable constraints
@@ -99,10 +99,10 @@ Everything planned for 1.0 is done; what works today, with links to the guides, 
   Windows, Linux, macOS and Android targets; only the three CI targets are tested.
 - Rust 1.88 or newer (checked in CI). The public API follows the rules in
   [docs/api-guidelines.md](docs/api-guidelines.md).
-- Jolt and joltc come prebuilt on x86_64 Windows (MSVC) and Linux (GNU): the build script
-  downloads the release archive and checks it against a sha256 in the crate. Elsewhere, or when
-  no archive fits, they are built from pinned submodules with a C++ toolchain and CMake. No build
-  needs LLVM ([building](docs/building.md)).
+- Jolt and joltc come prebuilt on x86_64 Windows (MSVC), x86_64 Linux (GNU) and macOS on Apple
+  silicon: the build script downloads the release archive and checks it against a sha256 in the
+  crate. Elsewhere, or when no archive fits, they are built from pinned submodules with a C++
+  toolchain and CMake. No build needs LLVM ([building](docs/building.md)).
 
 ## Guarantees and limits
 

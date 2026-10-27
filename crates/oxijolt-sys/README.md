@@ -8,11 +8,12 @@ data, a soft body contact listener) and is compiled into the joltc archive. The 
 `oxijolt` crate.
 
 ## Build requirements
-On `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` the build script downloads the native
-libraries of this version's GitHub release with `curl` and checks them against the sha256 in the
-packaged `prebuilt.txt`; it needs only the platform linker. Elsewhere, and whenever no archive fits
-(another feature set, `crt-static`, an older MSVC toolset or glibc, an offline, vendored or Nix
-build, `JOLTC_PREBUILT=off`), it builds them from source, which needs:
+On `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin` the build
+script downloads the native libraries of this version's GitHub release with `curl` and checks them
+against the sha256 in the packaged `prebuilt.txt`; it needs only the platform linker. Elsewhere,
+and whenever no archive fits (another feature set, `crt-static`, an older MSVC toolset, glibc or
+macOS deployment target, an offline, vendored or Nix build, `JOLTC_PREBUILT=off`), it builds them
+from source, which needs:
 - A C++ toolchain (MSVC on Windows, GCC or Clang elsewhere)
 - CMake 3.20 or newer
 
