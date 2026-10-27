@@ -8,6 +8,9 @@ edition = "2021"
 rust-version = "1.88"
 keywords = ["physics", "jolt", "gamedev", "simulation", "deterministic"]
 categories = ["game-development", "simulation"]
+# Tests that build only inside the repository: the real-mesh checks need the unpublished
+# `mesh-import` and the models under `assets/`, the character study reads `docs/`.
+exclude = ["tests/real_meshes*", "tests/character_study.rs"]
 
 [package.metadata.docs.rs]
 features = ["glam032", "mint", "debug-renderer"]
