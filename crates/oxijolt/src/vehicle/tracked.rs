@@ -232,7 +232,7 @@ impl PhysicsWorld {
         if !limits::is_track_mass_ratio(track_mass_ratio) {
             return Err(VehicleError::InvalidValue(limits::TRACK_MASS_RATIO_RULE));
         }
-        let id = self.attach_vehicle(body, settings.build())?;
+        let id = self.attach_vehicle(body, settings.build(), settings.live_drivetrain())?;
         Ok(VehicleId::new(id.raw, self.tag))
     }
 

@@ -17,6 +17,7 @@
 //! vehicle every tick.
 
 mod control;
+mod drivetrain;
 mod id;
 mod motorcycle;
 mod readout;
@@ -40,7 +41,7 @@ pub use id::{
 };
 pub use motorcycle::MotorcycleLean;
 pub use readout::{VehicleRef, WheelContact, WheelState};
-use settings::{BuiltSettings, WheelGeometry};
+use settings::{BuiltSettings, LiveDrivetrain, WheelGeometry};
 pub use settings::{
     MotorcycleSettings, TrackedVehicleSettings, TrackedWheelSettings, VehicleAntiRollBar,
     VehicleCollisionTester, VehicleDifferentialSettings, VehicleEngineSettings,
@@ -85,6 +86,8 @@ pub(crate) struct VehicleEntry {
     kind: VehicleType,
     /// The vehicle wheel indices of a tracked vehicle's left and right track.
     tracks: Option<[Range<u32>; 2]>,
+    /// The drivetrain configuration last applied, which Jolt's state does not hold.
+    drivetrain: LiveDrivetrain,
 }
 
 /// The gravity override of the vehicle, or `None` while it uses the world's gravity.
@@ -222,7 +225,7 @@ impl PhysicsWorld {
     ) -> Result<VehicleId, VehicleError> {
         settings.validate(self.object_layer_count)?;
         self.check_chassis(body)?;
-        let id = self.attach_vehicle(body, settings.build())?;
+        let id = self.attach_vehicle(body, settings.build(), settings.live_drivetrain())?;
         Ok(VehicleId::new(id.raw, self.tag))
     }
 
@@ -259,11 +262,13 @@ impl PhysicsWorld {
 
     /// Creates the vehicle constraint from `built` on `body`, which
     /// [`check_chassis`](Self::check_chassis) accepted, installs its tester and registers it with
-    /// the system. Fails only when the world has run out of ids, before anything is created.
+    /// the system; the entry keeps `drivetrain`, the configuration `built` holds. Fails only when
+    /// the world has run out of ids, before anything is created.
     fn attach_vehicle(
         &mut self,
         body: BodyId,
         built: BuiltSettings,
+        drivetrain: LiveDrivetrain,
     ) -> Result<AnyVehicleId, VehicleError> {
         let raw = self.next_vehicle_id;
         if raw == u32::MAX {
@@ -316,6 +321,7 @@ impl PhysicsWorld {
             wheels: built.geometry,
             kind,
             tracks: built.tracks,
+            drivetrain,
         };
         install_tester(&mut entry, built.collision_tester);
         self.note_structure_change();

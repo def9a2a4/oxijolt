@@ -82,7 +82,16 @@ pub fn chassis_settings(layers: &CarLayers, position: RVec3, rotation: Quat) -> 
 
 /// The vehicle settings of the test car with `tester`.
 pub fn car_settings(tester: VehicleCollisionTester) -> WheeledVehicleSettings {
-    let wheels = WHEEL_POSITIONS
+    WheeledVehicleSettings::new(
+        car_wheels(),
+        vec![VehicleDifferentialSettings::new(Some(0), Some(1))],
+        tester,
+    )
+}
+
+/// The wheels of the test car, in wheel order.
+pub fn car_wheels() -> Vec<WheelSettings> {
+    WHEEL_POSITIONS
         .iter()
         .enumerate()
         .map(|(index, &position)| {
@@ -95,12 +104,7 @@ pub fn car_settings(tester: VehicleCollisionTester) -> WheeledVehicleSettings {
                 .max_steer_angle(if front { 30.0_f32.to_radians() } else { 0.0 })
                 .max_hand_brake_torque(if front { 0.0 } else { 4000.0 })
         })
-        .collect();
-    WheeledVehicleSettings::new(
-        wheels,
-        vec![VehicleDifferentialSettings::new(Some(0), Some(1))],
-        tester,
-    )
+        .collect()
 }
 
 /// Creates a chassis from `body` and attaches the test car with `tester` to it.

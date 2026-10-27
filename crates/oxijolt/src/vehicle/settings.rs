@@ -14,6 +14,7 @@ use crate::{PhysicsWorld, Vec3, VehicleError, VehicleType};
 
 mod collision_tester;
 mod drivetrain;
+mod live;
 mod motorcycle;
 mod presets;
 mod tracked;
@@ -23,6 +24,7 @@ pub use collision_tester::VehicleCollisionTester;
 pub use drivetrain::{
     VehicleDifferentialSettings, VehicleEngineSettings, VehicleTransmissionSettings,
 };
+pub(crate) use live::LiveDrivetrain;
 pub use motorcycle::MotorcycleSettings;
 pub(crate) use tracked::ChassisMass;
 pub use tracked::{TrackedVehicleSettings, TrackedWheelSettings, VehicleTrackSettings};

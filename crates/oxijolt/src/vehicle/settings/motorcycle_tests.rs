@@ -52,7 +52,9 @@ fn attached(settings: &MotorcycleSettings) -> (PhysicsWorld, *mut JPH_Motorcycle
                 .mass(240.0),
         )
         .unwrap();
-    let id = world.attach_vehicle(chassis, settings.build()).unwrap();
+    let id = world
+        .attach_vehicle(chassis, settings.build(), settings.live_drivetrain())
+        .unwrap();
     let constraint = world.vehicles[&id.raw].constraint.as_ptr();
     // SAFETY: the world owns the constraint; the getter returns a member, a motorcycle
     // controller, which derives from `VehicleController` with single inheritance.

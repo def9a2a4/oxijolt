@@ -250,7 +250,7 @@ impl PhysicsWorld {
         ) {
             return Err(VehicleError::InvalidValue(limits::LEAN_SPRING_RULE));
         }
-        let id = self.attach_vehicle(body, settings.build())?;
+        let id = self.attach_vehicle(body, settings.build(), settings.live_drivetrain())?;
         let entry = self
             .vehicles
             .get_mut(&id.raw)

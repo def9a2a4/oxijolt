@@ -236,6 +236,14 @@ fn jolt_message_keeps_whole_characters() {
 }
 
 #[test]
+fn fixed_at_creation_names_the_setting() {
+    assert_eq!(
+        VehicleError::FixedAtCreation("gear counts").to_string(),
+        "gear counts cannot change after the vehicle is created"
+    );
+}
+
+#[test]
 fn mapper_error_variants_display_their_joint() {
     assert_eq!(
         RagdollError::UnmappedJoint(3).to_string(),

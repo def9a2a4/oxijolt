@@ -149,20 +149,30 @@ pub fn bike_vehicle_settings(tester: VehicleCollisionTester) -> WheeledVehicleSe
         tester,
     )
     .max_pitch_roll_angle(60.0_f32.to_radians())
-    .engine(
-        VehicleEngineSettings::default()
-            .max_torque(150.0)
-            .min_rpm(1000.0)
-            .max_rpm(10000.0),
-    )
-    .transmission(
-        VehicleTransmissionSettings::default()
-            .gear_ratios(vec![2.27, 1.63, 1.3, 1.09, 0.96, 0.88])
-            .reverse_gear_ratios(vec![-4.0])
-            .shift_down_rpm(2000.0)
-            .shift_up_rpm(8000.0)
-            .clutch_strength(2.0),
-    )
+    .engine(bike_engine())
+    .transmission(bike_transmission())
+}
+
+/// The motorcycle sample's engine: 150 N·m from 1000 to 10000 rpm.
+pub fn bike_engine() -> VehicleEngineSettings {
+    VehicleEngineSettings::default()
+        .max_torque(150.0)
+        .min_rpm(1000.0)
+        .max_rpm(10000.0)
+}
+
+/// The forward gear ratios of the motorcycle sample.
+pub const BIKE_GEAR_RATIOS: [f32; 6] = [2.27, 1.63, 1.3, 1.09, 0.96, 0.88];
+
+/// The motorcycle sample's transmission: [`BIKE_GEAR_RATIOS`], one reverse gear, shifting
+/// between 2000 and 8000 rpm.
+pub fn bike_transmission() -> VehicleTransmissionSettings {
+    VehicleTransmissionSettings::default()
+        .gear_ratios(BIKE_GEAR_RATIOS.to_vec())
+        .reverse_gear_ratios(vec![-4.0])
+        .shift_down_rpm(2000.0)
+        .shift_up_rpm(8000.0)
+        .clutch_strength(2.0)
 }
 
 /// The cylinder tester of the motorcycle sample: convex radius fraction 1.

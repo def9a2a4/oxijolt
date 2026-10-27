@@ -283,8 +283,8 @@ pub struct TrackedVehicleSettings {
     pub(super) right: VehicleTrackSettings,
     pub(super) collision_tester: VehicleCollisionTester,
     frame: VehicleFrame,
-    engine: VehicleEngineSettings,
-    transmission: VehicleTransmissionSettings,
+    pub(super) engine: VehicleEngineSettings,
+    pub(super) transmission: VehicleTransmissionSettings,
 }
 
 impl TrackedVehicleSettings {
@@ -376,8 +376,18 @@ impl TrackedVehicleSettings {
     }
 
     /// Checks every value Jolt asserts on, indexes with or divides by, and the
-    /// [drive envelope](Self::validate_drive_envelope).
+    /// [drive envelope](Self::validate_drive_envelope) of tracks that start at rest.
     pub(crate) fn validate(&self, object_layer_count: u32) -> Result<(), VehicleError> {
+        self.validate_from(object_layer_count, &TrackSpeedBound::AT_REST)
+    }
+
+    /// [`validate`](Self::validate) for tracks that may start at the speeds `reached`, which
+    /// the earlier configurations of a live vehicle allowed.
+    pub(crate) fn validate_from(
+        &self,
+        object_layer_count: u32,
+        reached: &TrackSpeedBound,
+    ) -> Result<(), VehicleError> {
         self.frame.validate()?;
         for track in self.tracks() {
             track.validate()?;
@@ -396,15 +406,15 @@ impl TrackedVehicleSettings {
         self.engine.validate()?;
         self.transmission.validate(&self.engine)?;
         self.engine.validate_step_coefficients()?;
-        self.validate_drive_envelope()?;
+        self.validate_drive_envelope(reached)?;
         self.collision_tester
             .validate(object_layer_count, self.wheel_geometry().into_iter())
     }
 
     /// Checks that each track's speed limit at the engine's rpm keeps its `f32` divisor normal,
-    /// and that every term of the [`drive_envelope`](Self::drive_envelope) is at most
-    /// [`ENVELOPE_CEILING`].
-    fn validate_drive_envelope(&self) -> Result<(), VehicleError> {
+    /// and that every term of the [`drive_envelope`](Self::drive_envelope) from `reached` is at
+    /// most [`ENVELOPE_CEILING`].
+    fn validate_drive_envelope(&self, reached: &TrackSpeedBound) -> Result<(), VehicleError> {
         let invalid = |what| Err(VehicleError::InvalidValue(what));
         let (smallest_gear, _) = self.gear_range();
         for track in self.tracks() {
@@ -420,7 +430,7 @@ impl TrackedVehicleSettings {
             }
         }
         if !self
-            .drive_envelope()
+            .drive_envelope(reached)
             .into_iter()
             .all(|term| term <= ENVELOPE_CEILING)
         {
@@ -445,17 +455,23 @@ impl TrackedVehicleSettings {
         )
     }
 
-    /// The terms the tracked controller's step forms from the settings and from the track
-    /// speeds the drivetrain can reach, in real arithmetic: the drive envelope derived in
-    /// [docs/limits.md#track-drive-envelope].
+    /// The largest torque the transmission passes on in any gear, N·m.
+    fn transmission_torque(&self) -> f64 {
+        let (_, largest_gear) = self.gear_range();
+        largest_gear * f64::from(self.engine.largest_torque())
+    }
+
+    /// The track speeds these validated settings let the tracks reach when they start at the
+    /// speeds `reached` allows ([`TrackSpeedBound::AT_REST`] at creation); never below
+    /// `reached`. Derived in [docs/limits.md#track-drive-envelope].
     ///
     /// [docs/limits.md#track-drive-envelope]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#track-drive-envelope
-    fn drive_envelope(&self) -> Vec<f64> {
+    pub(super) fn track_speed_bound(&self, reached: &TrackSpeedBound) -> TrackSpeedBound {
         let smallest_ratio = 1.0 / f64::from(limits::MAX_RATIO);
         let dt = f64::from(PhysicsWorld::MAX_DELTA_TIME);
         let rpm_per_rad = f64::from(ANGULAR_VELOCITY_TO_RPM);
-        let (smallest_gear, largest_gear) = self.gear_range();
-        let transmission_torque = largest_gear * f64::from(self.engine.largest_torque());
+        let (smallest_gear, _) = self.gear_range();
+        let transmission_torque = self.transmission_torque();
         let tracks = self.tracks();
         let inertia = tracks.map(|track| f64::from(track.inertia));
         // How fast the drivetrain alone takes a track: its speed limit at the max rpm and the
@@ -467,14 +483,34 @@ impl TrackedVehicleSettings {
             limit + differential * transmission_torque * dt / f64::from(track.inertia)
         });
         // The largest `|ω_l| / I_l + |ω_r| / I_r`, which the synchronisation, damping and
-        // brakes never raise.
+        // brakes never raise, also when the tracks start at the reached speeds.
         let weighted = (target[0] / inertia[0] + target[1] / inertia[1])
             .max(target[0] * (1.0 / inertia[0] + 1.0 / (smallest_ratio * inertia[1])))
-            .max(target[1] * (1.0 / inertia[1] + 1.0 / (smallest_ratio * inertia[0])));
-        let speed = [
-            weighted * inertia[0].min(inertia[1] / smallest_ratio),
-            weighted * inertia[1].min(inertia[0] / smallest_ratio),
-        ];
+            .max(target[1] * (1.0 / inertia[1] + 1.0 / (smallest_ratio * inertia[0])))
+            .max(reached.weighted_with(inertia));
+        TrackSpeedBound {
+            speeds: [
+                (weighted * inertia[0].min(inertia[1] / smallest_ratio)).max(reached.speeds[0]),
+                (weighted * inertia[1].min(inertia[0] / smallest_ratio)).max(reached.speeds[1]),
+            ],
+            weighted,
+            inertias: inertia,
+        }
+    }
+
+    /// The terms the tracked controller's step forms from the settings and from the track
+    /// speeds the drivetrain can reach from `reached` (see
+    /// [`track_speed_bound`](Self::track_speed_bound)), in real arithmetic: the drive envelope
+    /// derived in [docs/limits.md#track-drive-envelope].
+    ///
+    /// [docs/limits.md#track-drive-envelope]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#track-drive-envelope
+    fn drive_envelope(&self, reached: &TrackSpeedBound) -> Vec<f64> {
+        let smallest_ratio = 1.0 / f64::from(limits::MAX_RATIO);
+        let dt = f64::from(PhysicsWorld::MAX_DELTA_TIME);
+        let transmission_torque = self.transmission_torque();
+        let tracks = self.tracks();
+        let inertia = tracks.map(|track| f64::from(track.inertia));
+        let speed = self.track_speed_bound(reached).speeds;
         let sync = (speed[0] + speed[1]) / (smallest_ratio * (inertia[0] + inertia[1]));
         let mut terms = vec![transmission_torque, sync, sync * inertia[0].max(inertia[1])];
         for (side, track) in tracks.into_iter().enumerate() {
@@ -586,6 +622,40 @@ impl TrackedVehicleSettings {
             unsafe { JPH_TrackedVehicleControllerSettings_SetTrack(ptr, side as u32, &jolt_track) };
         }
         controller
+    }
+}
+
+/// How fast the tracks of a live tracked vehicle can turn under every configuration it had: the
+/// running maximum the [drive envelope](TrackedVehicleSettings::drive_envelope) of a new
+/// configuration starts from, derived in [docs/limits.md#track-drive-envelope].
+///
+/// [docs/limits.md#track-drive-envelope]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#track-drive-envelope
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TrackSpeedBound {
+    /// The largest `|ω|` of the left and the right track, rad/s.
+    pub(crate) speeds: [f64; 2],
+    /// The largest weighted speed `|ω_l| / I_l + |ω_r| / I_r` with the track inertias
+    /// [`inertias`](Self::inertias).
+    pub(crate) weighted: f64,
+    /// The left and right track inertias, kg·m², that [`weighted`](Self::weighted) uses.
+    pub(crate) inertias: [f64; 2],
+}
+
+impl TrackSpeedBound {
+    /// Tracks at rest, as at creation.
+    pub(crate) const AT_REST: Self = Self {
+        speeds: [0.0; 2],
+        weighted: 0.0,
+        inertias: [1.0; 2],
+    };
+
+    /// The largest weighted speed with the track inertias `inertia`: the smaller of the bound
+    /// from each track's largest speed and the stored weighted bound rescaled to `inertia`.
+    fn weighted_with(&self, inertia: [f64; 2]) -> f64 {
+        let from_speeds = self.speeds[0] / inertia[0] + self.speeds[1] / inertia[1];
+        let rescaled =
+            self.weighted * (self.inertias[0] / inertia[0]).max(self.inertias[1] / inertia[1]);
+        from_speeds.min(rescaled)
     }
 }
 

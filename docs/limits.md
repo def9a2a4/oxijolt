@@ -1009,6 +1009,33 @@ wide-ratio tracks gave NaN on the second step, in the default and the asserts bu
 inertia range or the radius ratio removed instead, the envelope refuses the two probes above by
 itself: those ranges keep its inputs physical.
 
+### Live changes
+
+`VehicleMut::set_engine` and `set_transmission` change the drivetrain of a tracked vehicle that is
+already moving, and Jolt never clamps a track's speed. After a change the tracks do not start at
+rest. The vehicle keeps two bounds over every configuration it had: each track's largest speed
+`Ω_old,i`, and the largest weighted speed `β_old`, measured with the inertias `I_old,i` of the
+configuration before. With the new inertias `I_i` the weighted speed then starts at most at
+
+```text
+B_0 = min(Ω_old,l/I_l + Ω_old,r/I_r,  β_old·max(I_old,l/I_l, I_old,r/I_r))
+```
+
+(the first from each track's bound, the second because `|ω_i|/I_i = (|ω_i|/I_old,i)·(I_old,i/I_i)`).
+The induction above starts from `B ≤ B_0`, so the new configuration keeps
+
+```text
+β' = max(β, B_0)
+|ω_i| ≤ Ω_i = max(Ω_old,i, β'·min(I_i, I_j/r))
+```
+
+and the envelope is checked with these `Ω_i`; `β'` and `Ω_i` become the stored bounds. A change
+the envelope refuses changes nothing. A change that keeps the inertias gives `B_0 ≤ β_old ≤ β'`,
+so applying the same configuration again leaves the bounds as they are; the first bound alone
+would double `β'` on each such change for tracks of equal inertia. A `WorldState` restore can only
+bring back track speeds that some configuration the vehicle had allowed, and the stored bounds
+cover every configuration: the track speed bounds are running maxima and never shrink.
+
 ## Track inertia ratio
 
 Under each unbraked wheel in contact, Jolt sizes the longitudinal impulse for that track's inertia
