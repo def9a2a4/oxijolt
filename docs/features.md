@@ -52,6 +52,9 @@ what is planned next.
   threads, quality, determinism and features, with the scripts and raw results.
 - Solver velocity and position steps chosen per world (`WorldSettings::velocity_steps`,
   `position_steps`), within Jolt's limits ([limits](limits.md#solver-step-counts)).
+- Penetration slop and speculative contact distance chosen per world
+  (`WorldSettings::penetration_slop`, `speculative_contact_distance`)
+  ([limits](limits.md#contact-distances)).
 - Several collision steps in one update (`PhysicsWorld::step_with_collision_steps`, up to
   `MAX_COLLISION_STEPS`) to sub-step a fast scene ([limits](limits.md#collision-steps)).
 - Debug wireframes as line data (feature `debug-renderer`); nothing is drawn.

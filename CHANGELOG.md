@@ -4,6 +4,13 @@ All notable changes to this fork. The format follows [Keep a Changelog](https://
 
 ## Unreleased
 
+- `WorldSettings::penetration_slop` and `speculative_contact_distance` set Jolt's penetration
+  slop and speculative contact distance per world, in metres (default 0.02 m, Jolt's;
+  `0..=limits::MAX_SHAPE_EXTENT`, other values refused with `WorldError::InvalidValue` before any
+  native call). They are set when the world is created and read back with
+  `PhysicsWorld::penetration_slop` and `speculative_contact_distance`. The slop is the overlap
+  Jolt leaves uncorrected, not a depth bodies are pushed to
+  ([limits](docs/limits.md#contact-distances)).
 - CI builds and tests macOS on Apple silicon (`aarch64-apple-darwin`, Apple clang) in the same
   five configurations as Windows and Linux, together with the playground and the real-mesh
   checks. macOS still builds Jolt from source: the releases carry no macOS archive. The engine

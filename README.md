@@ -79,6 +79,7 @@ Everything planned for 1.0 is done; what works today, with links to the guides, 
 
 - [x] Comparison with Rapier and Avian
 - [x] Solver step counts per world
+- [x] Contact tuning per world (penetration slop, speculative contact distance)
 - [ ] Bevy plugin, in a separate repository
 - [x] macOS (Apple silicon) in CI
 - [ ] macOS in releases
