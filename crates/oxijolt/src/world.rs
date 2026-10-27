@@ -443,6 +443,8 @@ impl PhysicsWorld {
         let mut physics = unsafe { physics_settings(system.as_ptr()) };
         physics.numVelocitySteps = settings.velocity_steps;
         physics.numPositionSteps = settings.position_steps;
+        physics.penetrationSlop = settings.penetration_slop;
+        physics.speculativeContactDistance = settings.speculative_contact_distance;
         // SAFETY: as above; `physics` is a live local that joltc copies field by field.
         unsafe { JPH_PhysicsSystem_SetPhysicsSettings(system.as_ptr(), &mut physics) };
 
@@ -535,6 +537,19 @@ impl PhysicsWorld {
     pub fn position_steps(&self) -> u32 {
         // SAFETY: as in `velocity_steps`.
         unsafe { physics_settings(self.system.as_ptr()) }.numPositionSteps
+    }
+
+    /// Penetration slop in metres, as Jolt holds it ([`WorldSettings::penetration_slop`]).
+    pub fn penetration_slop(&self) -> f32 {
+        // SAFETY: as in `velocity_steps`.
+        unsafe { physics_settings(self.system.as_ptr()) }.penetrationSlop
+    }
+
+    /// Speculative contact distance in metres, as Jolt holds it
+    /// ([`WorldSettings::speculative_contact_distance`]).
+    pub fn speculative_contact_distance(&self) -> f32 {
+        // SAFETY: as in `velocity_steps`.
+        unsafe { physics_settings(self.system.as_ptr()) }.speculativeContactDistance
     }
 
     /// Number of bodies in the world.

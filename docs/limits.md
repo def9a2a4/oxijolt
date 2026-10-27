@@ -375,7 +375,7 @@ equal bytes and that a restored shape saves the bytes it came from.
 The counts are written once, in `PhysicsWorld::new`, through joltc's
 `JPH_PhysicsSystem_SetPhysicsSettings`. joltc copies every field of its `JPH_PhysicsSettings` both
 ways; the one Jolt field it lacks, `mInternalEdgeRemovalVertexToleranceSq`, is set to Jolt's default,
-which oxijolt never changes. `solver_steps_leave_every_other_physics_setting_at_jolts_default` checks
+which oxijolt never changes. `world_settings_leave_every_other_physics_setting_at_jolts_default` checks
 that every other field still holds Jolt's default after the write. The bounds are checked
 by `step_counts_outside_jolts_range_are_refused` and `step_counts_read_back_from_jolt`; a five-cube
 stack at 2 velocity and 0 position steps stays finite and above the floor for 60 steps

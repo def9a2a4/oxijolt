@@ -142,15 +142,20 @@ fn worker_thread_bounds_are_validated() {
     }
 }
 
-/// Jolt's `PhysicsSettings` defaults (`PhysicsSettings.h:36-126`) with the given step counts.
-fn jolt_default_physics_settings(velocity_steps: u32, position_steps: u32) -> JPH_PhysicsSettings {
+/// Jolt's `PhysicsSettings` defaults (`PhysicsSettings.h:36-126`) with the values oxijolt sets.
+fn jolt_default_physics_settings(
+    velocity_steps: u32,
+    position_steps: u32,
+    penetration_slop: f32,
+    speculative_contact_distance: f32,
+) -> JPH_PhysicsSettings {
     JPH_PhysicsSettings {
         maxInFlightBodyPairs: 16384,
         stepListenersBatchSize: 8,
         stepListenerBatchesPerJob: 1,
         baumgarte: 0.2,
-        speculativeContactDistance: 0.02,
-        penetrationSlop: 0.02,
+        speculativeContactDistance: speculative_contact_distance,
+        penetrationSlop: penetration_slop,
         linearCastThreshold: 0.75,
         linearCastMaxPenetration: 0.25,
         manifoldTolerance: 1.0e-3,
@@ -175,17 +180,80 @@ fn jolt_default_physics_settings(velocity_steps: u32, position_steps: u32) -> JP
 }
 
 #[test]
-fn solver_steps_leave_every_other_physics_setting_at_jolts_default() {
-    for (velocity, position) in [(10, 2), (4, 0), (255, 255)] {
-        let settings = WorldSettings::default()
-            .velocity_steps(velocity)
-            .position_steps(position);
+fn world_settings_leave_every_other_physics_setting_at_jolts_default() {
+    let cases = [
+        (WorldSettings::default(), (10, 2, 0.02, 0.02)),
+        (
+            WorldSettings::default()
+                .velocity_steps(4)
+                .position_steps(0)
+                .penetration_slop(0.005)
+                .speculative_contact_distance(0.05),
+            (4, 0, 0.005, 0.05),
+        ),
+        (
+            WorldSettings::default()
+                .velocity_steps(255)
+                .position_steps(255)
+                .penetration_slop(0.0)
+                .speculative_contact_distance(limits::MAX_SHAPE_EXTENT),
+            (255, 255, 0.0, 2000.0),
+        ),
+        (
+            WorldSettings::default()
+                .penetration_slop(limits::MAX_SHAPE_EXTENT)
+                .speculative_contact_distance(0.0),
+            (10, 2, 2000.0, 0.0),
+        ),
+    ];
+    for (settings, (velocity, position, slop, distance)) in cases {
         let world = PhysicsWorld::new(settings).unwrap();
         // SAFETY: the world's system is live and nothing steps it.
         let read = unsafe { physics_settings(world.system.as_ptr()) };
         assert_eq!(
             format!("{read:?}"),
-            format!("{:?}", jolt_default_physics_settings(velocity, position))
+            format!(
+                "{:?}",
+                jolt_default_physics_settings(velocity, position, slop, distance)
+            )
         );
+    }
+}
+
+#[test]
+fn contact_distances_are_validated() {
+    type Setter = fn(WorldSettings, f32) -> WorldSettings;
+    let setters: [(&str, Setter); 2] = [
+        ("penetration_slop", WorldSettings::penetration_slop),
+        (
+            "speculative_contact_distance",
+            WorldSettings::speculative_contact_distance,
+        ),
+    ];
+    for (name, set) in setters {
+        for valid in [0.0, -0.0, 0.02, limits::MAX_SHAPE_EXTENT] {
+            assert_eq!(
+                set(WorldSettings::default(), valid).validate(),
+                Ok(()),
+                "{name}({valid:?}) was refused"
+            );
+        }
+        for invalid in [
+            -f32::from_bits(1),
+            -0.001,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MAX,
+            limits::MAX_SHAPE_EXTENT.next_up(),
+        ] {
+            assert!(
+                matches!(
+                    set(WorldSettings::default(), invalid).validate(),
+                    Err(WorldError::InvalidValue(_))
+                ),
+                "{name}({invalid:?}) was accepted"
+            );
+        }
     }
 }

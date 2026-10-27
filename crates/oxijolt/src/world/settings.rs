@@ -62,6 +62,8 @@ pub struct WorldSettings {
     pub(super) layers: CollisionLayers,
     pub(super) velocity_steps: u32,
     pub(super) position_steps: u32,
+    pub(super) penetration_slop: f32,
+    pub(super) speculative_contact_distance: f32,
 }
 
 impl Default for WorldSettings {
@@ -76,6 +78,8 @@ impl Default for WorldSettings {
             layers: CollisionLayers::default(),
             velocity_steps: 10,
             position_steps: 2,
+            penetration_slop: 0.02,
+            speculative_contact_distance: 0.02,
         }
     }
 }
@@ -247,6 +251,47 @@ impl WorldSettings {
         self
     }
 
+    /// How far, in metres, two bodies may overlap before Jolt's position iterations push them
+    /// apart (Jolt `PhysicsSettings::mPenetrationSlop`). It is a tolerance Jolt leaves
+    /// uncorrected, not a depth bodies are pushed to: an overlap within it is left as it is, and
+    /// only the part beyond it is corrected, by the [`position_steps`](Self::position_steps) of
+    /// each step (not at all with 0 position steps). Smaller values let resting bodies sink less
+    /// into each other, at the cost of contacts that break and re-form, which makes stacks
+    /// jitter. It also caps how far a
+    /// [`MotionQuality::LinearCast`](crate::MotionQuality::LinearCast) body may move into
+    /// another before its continuous collision check stops it.
+    ///
+    /// Finite and between 0 and [`limits::MAX_SHAPE_EXTENT`]; [`PhysicsWorld::new`] refuses
+    /// other values with [`WorldError::InvalidValue`]. Default 0.02 m, Jolt's. Set once, when the
+    /// world is created. See [docs/limits.md].
+    ///
+    /// [`PhysicsWorld::new`]: crate::PhysicsWorld::new
+    /// [docs/limits.md]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#contact-distances
+    #[must_use]
+    pub fn penetration_slop(mut self, value: f32) -> Self {
+        self.penetration_slop = value;
+        self
+    }
+
+    /// The distance, in metres, within which Jolt creates contacts between bodies that do not
+    /// touch yet, so the solver can slow them before they hit (Jolt
+    /// `PhysicsSettings::mSpeculativeContactDistance`). Such contacts are reported with a
+    /// negative [`ContactManifold::penetration_depth`](crate::ContactManifold::penetration_depth).
+    /// Larger values catch fast bodies earlier but pair more bodies in the broad phase and can
+    /// stop a body at a contact it would have missed (a ghost collision); 0 removes the margin.
+    ///
+    /// Finite and between 0 and [`limits::MAX_SHAPE_EXTENT`]; [`PhysicsWorld::new`] refuses
+    /// other values with [`WorldError::InvalidValue`]. Default 0.02 m, Jolt's. Set once, when the
+    /// world is created. See [docs/limits.md].
+    ///
+    /// [`PhysicsWorld::new`]: crate::PhysicsWorld::new
+    /// [docs/limits.md]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#contact-distances
+    #[must_use]
+    pub fn speculative_contact_distance(mut self, value: f32) -> Self {
+        self.speculative_contact_distance = value;
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<(), WorldError> {
         let invalid = |what| Err(WorldError::InvalidValue(what));
         if !(1..=Self::MAX_BODIES).contains(&self.max_bodies) {
@@ -274,6 +319,14 @@ impl WorldSettings {
         }
         if self.position_steps > Self::MAX_SOLVER_STEPS {
             return invalid("position_steps must be at most 255");
+        }
+        if !limits::is_local_distance(self.penetration_slop) {
+            return invalid("penetration_slop must be between 0 and limits::MAX_SHAPE_EXTENT");
+        }
+        if !limits::is_local_distance(self.speculative_contact_distance) {
+            return invalid(
+                "speculative_contact_distance must be between 0 and limits::MAX_SHAPE_EXTENT",
+            );
         }
         self.layers.validate()
     }
