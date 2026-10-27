@@ -20,12 +20,12 @@ use std::ffi::c_void;
 use std::mem;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use oxijolt_sys::*;
 
 use crate::owned::{JoltObject, Owned};
+use crate::panic_slot::{first_payload, PanicSlot};
 use crate::world::WorldTag;
 use crate::{BodyId, PhysicsWorld};
 use estimate::SolverSettings;
@@ -283,61 +283,6 @@ impl WorldEvents {
     }
 }
 
-/// The first panic of a callback, kept until the world resumes it.
-#[derive(Default)]
-struct PanicSlot {
-    panicked: AtomicBool,
-    payload: Mutex<Option<Box<dyn Any + Send>>>,
-}
-
-impl PanicSlot {
-    /// Keeps `payload` when it is the first, and drops later ones without letting their drop
-    /// unwind.
-    fn record(&self, payload: Box<dyn Any + Send>) {
-        let first = self
-            .panicked
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok();
-        if first {
-            *self.payload.lock().unwrap_or_else(PoisonError::into_inner) = Some(payload);
-        } else {
-            drop_payload(payload);
-        }
-    }
-
-    /// The kept payload, after which the slot is empty again.
-    fn take(&self) -> Option<Box<dyn Any + Send>> {
-        let payload = self
-            .payload
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        self.panicked.store(false, Ordering::Release);
-        payload
-    }
-}
-
-/// Drops a panic payload whose own `Drop` may panic, without unwinding.
-fn drop_payload(payload: Box<dyn Any + Send>) {
-    if let Err(panic_in_drop) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
-        mem::forget(panic_in_drop);
-    }
-}
-
-/// Keeps the first of two payloads and drops the other.
-pub(crate) fn first_payload(
-    first: Option<Box<dyn Any + Send>>,
-    second: Option<Box<dyn Any + Send>>,
-) -> Option<Box<dyn Any + Send>> {
-    match (first, second) {
-        (Some(first), Some(second)) => {
-            drop_payload(second);
-            Some(first)
-        }
-        (first, second) => first.or(second),
-    }
-}
-
 /// The solver settings of `system` that collision estimates use.
 ///
 /// # Safety
@@ -412,7 +357,7 @@ impl ListenerContext {
     /// Calls the user listener unless a callback panicked since the world last resumed a panic;
     /// `None` when it did not return.
     fn call_listener<R>(&self, call: impl FnOnce() -> R) -> Option<R> {
-        if self.panic.panicked.load(Ordering::Acquire) {
+        if self.panic.has_panicked() {
             return None;
         }
         match catch_unwind(AssertUnwindSafe(call)) {

@@ -6,8 +6,9 @@
 //! A vehicle is a constraint and a step listener of the world's Jolt system. During
 //! [`PhysicsWorld::step`] Jolt runs it before each collision step: it casts every wheel against
 //! the scene, applies gravity (or the override of [`VehicleMut::set_gravity`]), then the engine,
-//! brakes and tire friction act through the constraint. No Rust code runs inside the step, and
-//! no vehicle can be read or changed during it, because the step takes `&mut PhysicsWorld`.
+//! brakes and tire friction act through the constraint. Rust code runs inside the step only
+//! through a tire max impulse callback ([`VehicleMut::set_tire_max_impulse_callback`]), and no
+//! vehicle can be read or changed during it, because the step takes `&mut PhysicsWorld`.
 //!
 //! The chassis stays an ordinary body owned by the caller: its pose and velocities come from
 //! [`PhysicsWorld::body`], and it cannot be removed while a vehicle uses it. For a vehicle under
@@ -22,8 +23,10 @@ mod id;
 mod motorcycle;
 mod readout;
 mod settings;
+mod tire;
 mod tracked;
 
+use std::any::Any;
 use std::marker::PhantomData;
 use std::ops::Range;
 
@@ -33,6 +36,7 @@ use crate::body::with_locked_body;
 use crate::constraint::constraint_base;
 use crate::math::is_unit;
 use crate::owned::{JoltObject, Owned};
+use crate::panic_slot::first_payload;
 use crate::{AllowedDofs, BodyError, BodyId, MotionType, PhysicsWorld, Vec3, VehicleError};
 
 pub use control::{DriverInput, VehicleMut};
@@ -48,6 +52,8 @@ pub use settings::{
     VehicleCollisionTester, VehicleDifferentialSettings, VehicleEngineSettings,
     VehicleTrackSettings, VehicleTransmissionSettings, WheelSettings, WheeledVehicleSettings,
 };
+use tire::TireCallback;
+pub use tire::{TireMaxImpulse, TireMaxImpulseInput};
 pub use tracked::{TrackSide, TrackState, TrackedDriverInput};
 
 /// A vehicle constraint, of which the world holds the one reference
@@ -89,6 +95,10 @@ pub(crate) struct VehicleEntry {
     tracks: Option<[Range<u32>; 2]>,
     /// The drivetrain configuration last applied, which Jolt's state does not hold.
     drivetrain: LiveDrivetrain,
+    /// The tire max impulse callback whose address the controller holds. Field order is drop
+    /// order: the constraint, which holds the native function object with this address, is
+    /// unregistered (`unregister_vehicle`) and released before the callback drops.
+    tire_callback: Option<Box<TireCallback>>,
 }
 
 /// The gravity override of the vehicle, or `None` while it uses the world's gravity.
@@ -162,9 +172,10 @@ impl PhysicsWorld {
     /// From now on the vehicle runs inside every [`step`](Self::step), as a constraint and a
     /// step listener of the world's Jolt system: before the collision step it casts every wheel
     /// against the scene and applies gravity (or the override of [`VehicleMut::set_gravity`]),
-    /// then engine, brakes and tire friction act through the constraint. No Rust code runs
-    /// inside the step, and no vehicle can be read or changed during it, because the step takes
-    /// `&mut PhysicsWorld`.
+    /// then engine, brakes and tire friction act through the constraint. Rust code runs inside
+    /// the step only through a tire max impulse callback
+    /// ([`VehicleMut::set_tire_max_impulse_callback`]), and no vehicle can be read or changed
+    /// during it, because the step takes `&mut PhysicsWorld`.
     ///
     /// The chassis stays an ordinary body owned by the caller: its pose and velocities come from
     /// [`body`](Self::body), and [`remove_body`](Self::remove_body) refuses it while the vehicle
@@ -323,6 +334,7 @@ impl PhysicsWorld {
             kind,
             tracks: built.tracks,
             drivetrain,
+            tire_callback: None,
         };
         install_tester(&mut entry, built.collision_tester);
         self.note_structure_change();
@@ -473,6 +485,15 @@ impl PhysicsWorld {
             world: self.tag,
             kind: entry.kind,
         })
+    }
+
+    /// The first panic of every vehicle's tire max impulse callback since the last call, in
+    /// vehicle id order; every callback's panic is taken, later ones dropped.
+    pub(crate) fn take_tire_callback_panics(&mut self) -> Option<Box<dyn Any + Send>> {
+        self.vehicles
+            .values()
+            .filter_map(|entry| entry.tire_callback.as_deref())
+            .fold(None, |first, tire| first_payload(first, tire.take_panic()))
     }
 
     /// Whether `body` is the chassis of a vehicle of this world.
