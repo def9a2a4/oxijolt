@@ -5,13 +5,15 @@ name: Release
 #   archive-list           writes their sha256 into crates/oxijolt-sys/prebuilt.txt as one commit
 #                          on top of the tag, then packages both crates and checks that their
 #                          builds take the archives (served locally) without CMake; no write token
+#   macos-packages         builds both packages on macOS from the archives, no write token
 #   github-release         attaches the archives to the tag's GitHub release
 #   record-release-branch  pushes that commit to `release/v<version>`, which a maintainer merges
 #                          into main; nothing here writes main
 #   crates-io              publish.yml from that commit, which first checks the public assets
-# A manual run, or a branch push that changes this file, runs `build` and `archive-list` only and
-# keeps the archives as workflow artifacts. Path filters do not apply to tag pushes. A failed tag
-# run resumes with "Re-run failed jobs", or with the Publish workflow and ref=release/v<version>.
+# A manual run, or a branch push that changes this file, runs `build`, `archive-list` and
+# `macos-packages` only and keeps the archives as workflow artifacts. Path filters do not apply
+# to tag pushes. A failed tag run resumes with "Re-run failed jobs", or with the Publish workflow
+# and ref=release/v<version>.
 
 on:
   push:
@@ -103,6 +105,9 @@ jobs:
           # the archives usable with 2022 and 2026.
           - { os: windows-2022, target: x86_64-pc-windows-msvc }
           - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, container: 'ubuntu:22.04' }
+          # Apple silicon on the oldest supported arm64 image; objects of an older Xcode link with
+          # newer ones.
+          - { os: macos-15, target: aarch64-apple-darwin }
         features:
           - ""
           - double-precision
@@ -161,6 +166,20 @@ jobs:
           echo "CC=gcc-12" >> "$GITHUB_ENV"
           echo "CXX=g++-12" >> "$GITHUB_ENV"
 
+      # cc and CMake read MACOSX_DEPLOYMENT_TARGET, so every object gets minimum 11.0, which the
+      # archives must not exceed: it is Rust's minimum for the target.
+      - name: Pin the macOS deployment target
+        if: runner.os == 'macOS'
+        run: |
+          xcodebuild -version
+          clang --version
+          xcrun --show-sdk-version
+          cmake --version
+          rust_min=$(env -u MACOSX_DEPLOYMENT_TARGET rustc --print deployment-target --target "$RUST_TARGET")
+          echo "Rust's minimum: $rust_min"
+          [ "${rust_min#*=}" = 11.0 ] || { echo "the archives must not need a newer macOS than Rust's minimum ($rust_min)"; exit 1; }
+          echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
+
       # A fresh target directory without a cache, so exactly one native prefix exists.
       - name: Build the native library
         run: |
@@ -186,12 +205,20 @@ jobs:
 
           # The CPU features Jolt was compiled for, from its CMake options.
           cache="$PREFIX/build/CMakeCache.txt"
-          cpu=$(grep -E '^(USE_(SSE4_1|SSE4_2|AVX|AVX2|AVX512|LZCNT|TZCNT|F16C|FMADD)|CROSS_PLATFORM_DETERMINISTIC):BOOL=' "$cache")
-          grep -q '^USE_AVX2:BOOL=ON$' <<< "$cpu" || { echo "unexpected CPU options:"; echo "$cpu"; exit 1; }
-          fma=no
-          grep -q '^USE_FMADD:BOOL=ON$' <<< "$cpu" && grep -q '^CROSS_PLATFORM_DETERMINISTIC:BOOL=OFF$' <<< "$cpu" && fma=yes
+          if [ "$RUNNER_OS" = macOS ]; then
+            cpu=$(grep -E '^(CMAKE_OSX_ARCHITECTURES|CMAKE_OSX_DEPLOYMENT_TARGET|CROSS_PLATFORM_DETERMINISTIC):[A-Z]*=' "$cache")
+            grep -qE '^CMAKE_OSX_ARCHITECTURES:[A-Z]*=arm64$' <<< "$cpu" || { echo "unexpected CPU options:"; echo "$cpu"; exit 1; }
+            # The minimum macOS of every object, before PROVENANCE.txt states it.
+            bash scripts/check_macos_objects.sh "$MACOSX_DEPLOYMENT_TARGET" "$PREFIX"/lib/*.a
+          else
+            cpu=$(grep -E '^(USE_(SSE4_1|SSE4_2|AVX|AVX2|AVX512|LZCNT|TZCNT|F16C|FMADD)|CROSS_PLATFORM_DETERMINISTIC):BOOL=' "$cache")
+            grep -q '^USE_AVX2:BOOL=ON$' <<< "$cpu" || { echo "unexpected CPU options:"; echo "$cpu"; exit 1; }
+            fma=no
+            grep -q '^USE_FMADD:BOOL=ON$' <<< "$cpu" && grep -q '^CROSS_PLATFORM_DETERMINISTIC:BOOL=OFF$' <<< "$cpu" && fma=yes
+          fi
           compiler=$(sed -nE 's/^set\(CMAKE_CXX_COMPILER_(ID|VERSION) "(.*)"\)$/\2/p' "$PREFIX"/build/CMakeFiles/*/CMakeCXXCompiler.cmake | tr '\n' ' ')
-          # `compiler:` gives the archive list its MSVC toolset and `glibc:` its glibc baseline.
+          # `compiler:` gives the archive list its MSVC toolset, `glibc:` its glibc baseline,
+          # `macos:` its macOS minimum.
           {
             echo "source: $GITHUB_REPOSITORY@$GITHUB_SHA"
             if [ -n "$CONTAINER" ]; then
@@ -203,24 +230,59 @@ jobs:
             if [ "$RUNNER_OS" = Linux ]; then
               echo "glibc: $(getconf GNU_LIBC_VERSION | cut -d' ' -f2)"
             fi
+            if [ "$RUNNER_OS" = macOS ]; then
+              echo "xcode: $(xcodebuild -version | tr '\n' ' ' | sed 's/ *$//')"
+              echo "sdk: $(xcrun --show-sdk-version)"
+              echo "macos: $MACOSX_DEPLOYMENT_TARGET"
+            fi
             echo "cargo target: $RUST_TARGET"
             echo "features: ${FEATURES:-none}"
             grep -E '^(joltc_commit|jolt_commit|jolt_version|joltc_ext|crt)=' "$PREFIX/$NATIVE_MANIFEST"
             echo "Jolt asserts: OFF"
             echo "CPU options:"
             echo "$cpu"
-            echo "FMA instructions used: $fma"
+            if [ "$RUNNER_OS" != macOS ]; then
+              echo "FMA instructions used: $fma"
+            fi
           } > "$stage/PROVENANCE.txt"
           cat "$stage/PROVENANCE.txt"
+
+      # The object audit must fail on a library with one object built for a newer macOS.
+      - name: The object audit refuses a newer object
+        if: runner.os == 'macOS' && matrix.features == ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/audit"
+          cd "$RUNNER_TEMP/audit"
+          echo 'int f(void) { return 1; }' > f.c
+          clang -c -arch arm64 -mmacosx-version-min=11.0 f.c -o a11.o
+          clang -c -arch arm64 -mmacosx-version-min=12.0 f.c -o a12.o
+          ar rcs good.a a11.o
+          ar rcs mixed.a a11.o a12.o
+          audit="$GITHUB_WORKSPACE/scripts/check_macos_objects.sh"
+          bash "$audit" 11.0 good.a
+          if bash "$audit" 11.0 mixed.a; then
+            echo "the audit accepted an object built for macOS 12.0"
+            exit 1
+          fi
 
       - name: Pack
         run: |
           mkdir -p "$RUNNER_TEMP/dist"
           # Relative paths: GNU tar would read a Windows drive letter as a remote host.
           cd "$RUNNER_TEMP/stage"
-          tar -czf "../dist/$ARCHIVE.tar.gz" "$ARCHIVE"
+          if [ "$RUNNER_OS" = macOS ]; then
+            # No AppleDouble (`._`) entries: the archive must hold exactly its own files.
+            COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf "../dist/$ARCHIVE.tar.gz" "$ARCHIVE"
+          else
+            tar -czf "../dist/$ARCHIVE.tar.gz" "$ARCHIVE"
+          fi
           cd ../dist
-          sha256sum "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+          # The same `hash  file` line either way, which `sha256sum -c` reads.
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+          else
+            shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+          fi
           cat "$ARCHIVE.tar.gz.sha256"
 
       # Builds against the unpacked archive the way a user would, and fails if CMake runs.
@@ -247,7 +309,8 @@ jobs:
         if: matrix.features == ''
         run: |
           cp -r "$RUNNER_TEMP/u/$ARCHIVE" "$RUNNER_TEMP/m"
-          sed -i 's/^double_precision=OFF$/double_precision=ON/' "$RUNNER_TEMP/m/$NATIVE_MANIFEST"
+          sed 's/^double_precision=OFF$/double_precision=ON/' "$RUNNER_TEMP/m/$NATIVE_MANIFEST" > "$RUNNER_TEMP/m/$NATIVE_MANIFEST.tmp"
+          mv "$RUNNER_TEMP/m/$NATIVE_MANIFEST.tmp" "$RUNNER_TEMP/m/$NATIVE_MANIFEST"
           grep -q '^double_precision=ON$' "$RUNNER_TEMP/m/$NATIVE_MANIFEST"
           log="$RUNNER_TEMP/mismatch.log"
           if JOLTC_LIB_DIR="$RUNNER_TEMP/m" CARGO_TARGET_DIR="$RUNNER_TEMP/s" cargo check --locked -p "$CRATE" --target "$RUST_TARGET" > "$log" 2>&1; then
@@ -304,7 +367,7 @@ jobs:
           pattern: ${{ needs.version.outputs.name }}-*
           merge-multiple: true
 
-      # The full release set: 2 targets x 8 feature subsets, every archive built from this commit.
+      # The full release set: 3 targets x 8 feature subsets, every archive built from this commit.
       - name: Write the list
         run: |
           cargo run --locked -p xtask -- prebuilt-list --dist "$RUNNER_TEMP/dist" \
@@ -355,9 +418,71 @@ jobs:
             ${{ runner.temp }}/archive-list/prebuilt.txt
           if-no-files-found: error
 
+  # The same package check on a Mac: the release commit from the bundle, its packages built
+  # with the archives served locally, without CMake. Runs build scripts, so no write token.
+  macos-packages:
+    name: Packages take the archives (macOS)
+    needs: [version, archive-list]
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CRATE: ${{ needs.version.outputs.name }}
+      SAFE_CRATE: ${{ needs.version.outputs.safe }}
+      RELEASE_COMMIT: ${{ needs.archive-list.outputs.ref }}
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/dist
+          pattern: ${{ needs.version.outputs.name }}-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: archive-list
+          path: ${{ runner.temp }}/archive-list
+
+      - name: Check out the release commit
+        run: |
+          bundle="$RUNNER_TEMP/archive-list/y.bundle"
+          git bundle verify "$bundle"
+          git fetch "$bundle" HEAD
+          fetched=$(git rev-parse FETCH_HEAD)
+          [ "$fetched" = "$RELEASE_COMMIT" ] || { echo "the bundle holds $fetched, not $RELEASE_COMMIT"; exit 1; }
+          git checkout --detach "$RELEASE_COMMIT"
+          git submodule update --init
+
+      - name: Packages take the archives
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "$RUNNER_TEMP/dist" > "$RUNNER_TEMP/server.log" 2>&1 &
+          server=$!
+          trap 'kill "$server"' EXIT
+          curl -s --retry 20 --retry-connrefused --retry-delay 1 -o /dev/null http://127.0.0.1:8765/
+          log="$RUNNER_TEMP/package.log"
+          env -u JOLTC_LIB_DIR JOLTC_PREBUILT=require JOLTC_PREBUILT_URL=http://127.0.0.1:8765 \
+            CMAKE=oxijolt-no-cmake CXX=oxijolt-no-cxx \
+            cargo package --locked -p "$CRATE" -p "$SAFE_CRATE" -vv > "$log" 2>&1 || { tail -80 "$log"; exit 1; }
+          grep "using the prebuilt archive" "$log"
+          used=$(grep -c "using the prebuilt archive" "$log" || true)
+          [ "$used" -ge 2 ] || { echo "expected both verify builds to take the archive, found $used"; exit 1; }
+          grep '"GET ' "$RUNNER_TEMP/server.log"
+
   github-release:
     name: GitHub release
-    needs: [version, archive-list]
+    needs: [version, archive-list, macos-packages]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -381,7 +506,7 @@ jobs:
           shopt -s nullglob
           archives=(*.tar.gz)
           sums=(*.tar.gz.sha256)
-          [ ${#archives[@]} -eq 16 ] && [ ${#sums[@]} -eq 16 ] || { echo "expected 16 archives and 16 checksums, found ${#archives[@]} and ${#sums[@]}"; exit 1; }
+          [ ${#archives[@]} -eq 24 ] && [ ${#sums[@]} -eq 24 ] || { echo "expected 24 archives and 24 checksums, found ${#archives[@]} and ${#sums[@]}"; exit 1; }
           sha256sum -c "${sums[@]}"
 
       - name: Write the release notes
@@ -394,14 +519,18 @@ jobs:
           takes an unpacked archive, checked against the crate features. Each `.sha256` file holds the
           archive's checksum.
 
-          - Targets: `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu`.
+          - Targets: `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`.
           - Windows: built with Visual Studio 2022 and the dynamic MSVC runtime (`/MD`). Link with that
             MSVC toolset or a newer one (the version is in `PROVENANCE.txt`); not usable with `crt-static`.
           - Linux: built with GCC 12 on Ubuntu 22.04; needs glibc 2.35 or newer and a compatible
             libstdc++ at run time.
+          - macOS (Apple silicon): built on the `macos-15` runner with its Xcode (versions in
+            `PROVENANCE.txt`) for macOS 11.0 or newer; the build script refuses it for an older
+            deployment target. Intel Macs build from source.
           - Jolt assertions are off.
-          - CPU: AVX2, BMI1, LZCNT, POPCNT and F16C; builds without `cross-platform-deterministic` also use FMA.
-            `PROVENANCE.txt` in each archive lists the options used.
+          - CPU on x86_64: AVX2, BMI1, LZCNT, POPCNT and F16C; builds without `cross-platform-deterministic`
+            also use FMA. On Apple silicon: no extra CPU features. `PROVENANCE.txt` in each archive lists
+            the options used.
 
           Other targets and configurations (for example `asserts`) build from source.
           EOF

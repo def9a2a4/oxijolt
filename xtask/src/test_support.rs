@@ -116,21 +116,31 @@ pub fn manifest_for(config: &ArchiveConfig) -> String {
     )
 }
 
-/// The provenance the Release workflow writes: source commit, compiler and, on Linux, glibc.
+/// The provenance the Release workflow writes: source commit, compiler, CPU options and, on
+/// Linux glibc, on macOS the deployment target.
 pub fn provenance_for(config: &ArchiveConfig, commit: &str) -> String {
     let linux = config.target.ends_with("-linux-gnu");
-    let compiler = if linux {
-        "GNU 12.3.0"
+    let macos = config.target.ends_with("-apple-darwin");
+    let (compiler, cpu) = if linux {
+        ("GNU 12.3.0", "USE_AVX2:BOOL=ON")
+    } else if macos {
+        (
+            "AppleClang 17.0.0.17000013",
+            "CMAKE_OSX_ARCHITECTURES:STRING=arm64",
+        )
     } else {
-        "MSVC 19.44.35229.0"
+        ("MSVC 19.44.35229.0", "USE_AVX2:BOOL=ON")
     };
     let mut text = format!(
         "source: owner/oxijolt@{commit}\nruntime image: test\ncompiler: {compiler} \n\
-         cargo target: {}\nCPU options:\nUSE_AVX2:BOOL=ON\n",
+         cargo target: {}\nCPU options:\n{cpu}\n",
         config.target
     );
     if linux {
         text += "glibc: 2.35\n";
+    }
+    if macos {
+        text += "macos: 11.0\n";
     }
     text
 }

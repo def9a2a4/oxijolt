@@ -338,8 +338,8 @@ fn archive_config(cfg: &NativeConfig) -> prebuilt::ArchiveConfig {
     }
 }
 
-/// What will link an archive for this target. Only MSVC and native Linux GNU builds have
-/// archives.
+/// What will link an archive for this target. Only MSVC, native Linux GNU and macOS builds
+/// have archives.
 #[cfg(feature = "prebuilt")]
 fn linker(cfg: &NativeConfig) -> Result<prebuilt::Linker, Unavailable> {
     let var = |name: &str| env::var(name).ok();
@@ -352,6 +352,12 @@ fn linker(cfg: &NativeConfig) -> Result<prebuilt::Linker, Unavailable> {
             cross: var("HOST") != var("TARGET"),
             overridden: prebuilt::gnu_linker_overridden(var),
             glibc: prebuilt_archive::host_glibc(),
+        })
+    } else if cfg.target_os == "macos" {
+        println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+        let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        Ok(prebuilt::Linker::Apple {
+            deployment_target: prebuilt_archive::rustc_deployment_target(&rustc, &cfg.target),
         })
     } else {
         Err(Unavailable::NoArchive)

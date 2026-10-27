@@ -4,6 +4,7 @@
 //! Shared by `build.rs` (feature `prebuilt`) and the `xtask` list writer through `#[path]`.
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
-use crate::prebuilt::{hex, Archive, Unavailable, Version2, SOURCE_INPUTS};
+use crate::prebuilt::{self, hex, Archive, Unavailable, Version2, SOURCE_INPUTS};
 use crate::targets::normalize_crlf;
 
 /// The sha256 of `bytes`.
@@ -413,4 +414,17 @@ pub fn host_glibc() -> Option<Version2> {
     }
     let text = String::from_utf8(output.stdout).ok()?;
     Version2::parse(text.trim().strip_prefix("glibc ")?)
+}
+
+/// The deployment target rustc links `target` for, which honours `MACOSX_DEPLOYMENT_TARGET`:
+/// `rustc --print deployment-target --target <target>`. `None` when rustc cannot say.
+pub fn rustc_deployment_target(rustc: &OsStr, target: &str) -> Option<Version2> {
+    let output = Command::new(rustc)
+        .args(["--print", "deployment-target", "--target", target])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    prebuilt::deployment_target_from_rustc(&String::from_utf8(output.stdout).ok()?)
 }

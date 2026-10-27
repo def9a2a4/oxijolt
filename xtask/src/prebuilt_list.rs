@@ -3,7 +3,7 @@
 //! `prebuilt-list --dist <dir> --url <base> --commit <sha>` reads every `*.tar.gz` in `dir`
 //! (the Release workflow's archives of commit `sha`) and writes `crates/oxijolt-sys/prebuilt.txt`
 //! (or `--out <file>`): the crate version, the asset URL `base`, the fingerprint of the native
-//! sources of the checkout, and each archive's sha256, configuration and oldest toolchain.
+//! sources of the checkout, and each archive's sha256, configuration and oldest toolchain or OS.
 //! Without `--allow-partial` the archives must be the full release set. The `.sha256` files next
 //! to the archives are ignored: every hash is taken from the archive bytes.
 //!
@@ -29,7 +29,19 @@ const PROVENANCE_FILE: &str = "PROVENANCE.txt";
 const RELEASE_TARGETS: &[(&str, &str)] = &[
     ("x86_64-pc-windows-msvc", "MultiThreadedDLL"),
     ("x86_64-unknown-linux-gnu", "none"),
+    ("aarch64-apple-darwin", "none"),
 ];
+
+/// The oldest macOS Rust links `target` for; an archive must not need a newer one.
+fn rust_macos_minimum(target: &str) -> Option<Version2> {
+    match target {
+        "aarch64-apple-darwin" => Some(Version2 {
+            major: 11,
+            minor: 0,
+        }),
+        _ => None,
+    }
+}
 
 /// Runs the subcommand with its arguments.
 pub fn run(args: &[String], usage: &str) -> anyhow::Result<()> {
@@ -192,13 +204,38 @@ pub fn read_archive(path: &Path, commit: &str) -> anyhow::Result<Archive> {
     } else {
         None
     };
+    let macos = if config.target.ends_with("-apple-darwin") {
+        Some(macos_minimum(
+            file,
+            &config.target,
+            &get(&provenance, "macos")?,
+        )?)
+    } else {
+        None
+    };
     Ok(Archive {
         name: name.to_owned(),
         sha256: prebuilt_archive::sha256(&bytes),
         config,
         msvc,
         glibc,
+        macos,
     })
+}
+
+/// The provenance `macos:` value `raw` of the archive `file` for `target`: exactly
+/// `major.minor`, and not newer than [`rust_macos_minimum`].
+fn macos_minimum(file: &str, target: &str, raw: &str) -> anyhow::Result<Version2> {
+    let macos = Version2::parse(raw)
+        .filter(|macos| macos.to_string() == raw)
+        .with_context(|| format!("{file}: macos {raw:?} is not major.minor"))?;
+    let minimum = rust_macos_minimum(target)
+        .with_context(|| format!("{file}: no macOS minimum known for {target}"))?;
+    ensure!(
+        macos <= minimum,
+        "{file}: built for macOS {macos}, newer than Rust's minimum {minimum}"
+    );
+    Ok(macos)
 }
 
 /// The manifest and the provenance of a `.tar.gz` whose entries all lie in `<name>/`.
@@ -360,6 +397,7 @@ mod tests {
     const COMMIT: &str = "1bb4c1ac08a8ace47f0e826dc14e090f0fc784c1";
     const WINDOWS: &str = "x86_64-pc-windows-msvc";
     const LINUX: &str = "x86_64-unknown-linux-gnu";
+    const MACOS: &str = "aarch64-apple-darwin";
     const URL: &str = "http://127.0.0.1:1/";
 
     struct Fixture {
@@ -406,6 +444,7 @@ mod tests {
         let fixture = Fixture::new();
         let windows = fixture.add_release(WINDOWS, 5);
         let linux = fixture.add_release(LINUX, 0);
+        let macos = fixture.add_release(MACOS, 2);
         write_file(
             fixture.dist.path(),
             &format!("{linux}.tar.gz.sha256"),
@@ -419,17 +458,30 @@ mod tests {
             list.sources,
             sources_fingerprint(fixture.crate_dir.path()).ok()
         );
-        let names: Vec<&str> = list.archives.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, [windows.as_str(), linux.as_str()]);
+        assert_eq!(list.archives.len(), 3);
+        let by_name = |name: &str| {
+            list.archives
+                .iter()
+                .find(|a| a.name == name)
+                .expect("listed")
+        };
 
-        let archive = &list.archives[0];
+        let archive = by_name(&windows);
         assert_eq!(archive.config, config(WINDOWS, 5));
         assert_eq!(archive.msvc, Version2::parse("14.44"));
         assert_eq!(archive.glibc, None);
+        assert_eq!(archive.macos, None);
         let bytes = fs::read(fixture.dist.path().join(format!("{windows}.tar.gz"))).expect("read");
         assert_eq!(archive.sha256, prebuilt_archive::sha256(&bytes));
-        assert_eq!(list.archives[1].glibc, Version2::parse("2.35"));
-        assert_eq!(list.archives[1].msvc, None);
+        let archive = by_name(&linux);
+        assert_eq!(archive.glibc, Version2::parse("2.35"));
+        assert_eq!(archive.msvc, None);
+        assert_eq!(archive.macos, None);
+        let archive = by_name(&macos);
+        assert_eq!(archive.config, config(MACOS, 2));
+        assert_eq!(archive.macos, Version2::parse("11.0"));
+        assert_eq!(archive.msvc, None);
+        assert_eq!(archive.glibc, None);
         assert_eq!(prebuilt::parse(&prebuilt::write(&list)), Ok(list));
     }
 
@@ -440,12 +492,39 @@ mod tests {
         fixture.add_release(LINUX, 0);
         let error = fixture.list(false).expect_err("partial").to_string();
         assert!(error.contains("--allow-partial"), "{error}");
-        for target in [WINDOWS, LINUX] {
-            for subset in 1..8 {
-                fixture.add_release(target, subset);
+        for target in [WINDOWS, LINUX, MACOS] {
+            for subset in 0..8 {
+                let first = subset == 0 && target != MACOS;
+                if !first {
+                    fixture.add_release(target, subset);
+                }
             }
         }
-        assert_eq!(fixture.list(false).expect("full").archives.len(), 16);
+        assert_eq!(fixture.list(false).expect("full").archives.len(), 24);
+
+        let without_apple_default = Fixture::new();
+        for target in [WINDOWS, LINUX, MACOS] {
+            for subset in 0..8 {
+                if (target, subset) != (MACOS, 0) {
+                    without_apple_default.add_release(target, subset);
+                }
+            }
+        }
+        let error = without_apple_default
+            .list(false)
+            .expect_err("missing")
+            .to_string();
+        assert!(error.contains("1 missing"), "{error}");
+
+        let intel = "oxijolt-sys-1.2.0-x86_64-apple-darwin-0";
+        fixture.add(
+            intel,
+            &release_archive(intel, &config("x86_64-apple-darwin", 0), COMMIT),
+        );
+        // Intel Macs have no release archives and no macOS minimum.
+        let error = format!("{:#}", fixture.list(false).expect_err("intel"));
+        assert!(error.contains(intel), "{error}");
+        assert!(error.contains("no macOS minimum known"), "{error}");
     }
 
     #[test]
@@ -456,6 +535,17 @@ mod tests {
         let gnu_compiler = provenance_for(&windows, COMMIT).replace("MSVC 19.44.35229.0", "GNU 12");
         let no_glibc = provenance_for(&linux, COMMIT).replace("glibc: 2.35\n", "");
         let twice = format!("{}target=x\n", manifest_for(&windows));
+        let macos = config(MACOS, 0);
+        let apple = |from: &str, to: &str| {
+            let provenance = provenance_for(&macos, COMMIT);
+            assert!(provenance.contains(from), "{from}");
+            release_archive_with(
+                "a",
+                &manifest_for(&macos),
+                &provenance.replace(from, to),
+                &[],
+            )
+        };
         let cases: Vec<(&str, Vec<u8>, &str)> = vec![
             (
                 "wrong stem",
@@ -509,6 +599,31 @@ mod tests {
                     &manifest_for(&windows),
                     &provenance_for(&windows, COMMIT),
                     &[("a/lib/libjoltc.a", b"x")],
+                ),
+                "is not a file of the archive",
+            ),
+            (
+                "macos without macos",
+                apple("macos: 11.0\n", ""),
+                "`macos` missing",
+            ),
+            (
+                "macos with a patch",
+                apple("macos: 11.0\n", "macos: 11.0.1\n"),
+                "major.minor",
+            ),
+            (
+                "macos newer than Rust's minimum",
+                apple("macos: 11.0\n", "macos: 12.0\n"),
+                "newer than Rust's minimum",
+            ),
+            (
+                "an Apple library in the MSVC spelling",
+                release_archive_with(
+                    "a",
+                    &manifest_for(&macos),
+                    &provenance_for(&macos, COMMIT),
+                    &[("a/lib/joltc.lib", b"x")],
                 ),
                 "is not a file of the archive",
             ),
@@ -577,6 +692,11 @@ mod tests {
         assert_eq!(library_files(WINDOWS, "joltc"), ["joltc.lib", "Jolt.lib"]);
         assert_eq!(
             library_files(LINUX, "joltc_double"),
+            ["libjoltc_double.a", "libJolt.a"]
+        );
+        assert_eq!(library_files(MACOS, "joltc"), ["libjoltc.a", "libJolt.a"]);
+        assert_eq!(
+            library_files(MACOS, "joltc_double"),
             ["libjoltc_double.a", "libJolt.a"]
         );
     }

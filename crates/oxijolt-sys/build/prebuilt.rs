@@ -75,6 +75,8 @@ pub enum Unavailable {
     CrossBuild,
     GlibcUnknown,
     GlibcTooOld { have: Version2, need: Version2 },
+    MacosUnknown,
+    MacosTooOld { have: Version2, need: Version2 },
     NoCurl,
     Download(String),
     TooLarge,
@@ -114,6 +116,11 @@ impl fmt::Display for Unavailable {
             Unavailable::GlibcTooOld { have, need } => {
                 write!(f, "glibc {have} is older than the archive's {need}")
             }
+            Unavailable::MacosUnknown => write!(f, "the macOS deployment target is unknown"),
+            Unavailable::MacosTooOld { have, need } => write!(
+                f,
+                "macOS deployment target {have} is older than the archive's {need}"
+            ),
             Unavailable::NoCurl => write!(f, "curl was not found"),
             Unavailable::Download(error) => write!(f, "download failed: {error}"),
             Unavailable::TooLarge => write!(f, "download failed: the archive is too large"),
@@ -146,7 +153,8 @@ pub fn skip_reason(env: impl Fn(&str) -> Option<String>, crate_dir: &Path) -> Op
     }
 }
 
-/// A `major.minor` version: an MSVC toolset (`14.44`) or a glibc release (`2.35`).
+/// A `major.minor` version: an MSVC toolset (`14.44`), a glibc release (`2.35`) or a macOS
+/// version (`11.0`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version2 {
     pub major: u32,
@@ -209,6 +217,9 @@ pub struct Archive {
     pub msvc: Option<Version2>,
     /// Oldest glibc it links against; present for every `-linux-gnu` archive.
     pub glibc: Option<Version2>,
+    /// Oldest macOS it runs on (its deployment target); present for every `-apple-darwin`
+    /// archive.
+    pub macos: Option<Version2>,
 }
 
 /// The parsed archive list. The header fields are present whenever there are archives.
@@ -289,6 +300,9 @@ pub fn write(list: &ArchiveList) -> String {
         }
         if let Some(glibc) = archive.glibc {
             text += &format!(" glibc={glibc}");
+        }
+        if let Some(macos) = archive.macos {
+            text += &format!(" macos={macos}");
         }
         text.push('\n');
     }
@@ -423,12 +437,16 @@ fn parse_archive(line: &str) -> Result<Archive, String> {
         },
         msvc: version("msvc")?,
         glibc: version("glibc")?,
+        macos: version("macos")?,
     };
     if archive.config.crt != "none" && archive.msvc.is_none() {
         return Err(format!("{name}: an MSVC archive needs `msvc`"));
     }
     if archive.config.target.ends_with("-linux-gnu") && archive.glibc.is_none() {
         return Err(format!("{name}: a -linux-gnu archive needs `glibc`"));
+    }
+    if archive.config.target.ends_with("-apple-darwin") && archive.macos.is_none() {
+        return Err(format!("{name}: an -apple-darwin archive needs `macos`"));
     }
     Ok(archive)
 }
@@ -443,6 +461,7 @@ const ARCHIVE_KEYS: &[&str] = &[
     "asserts",
     "msvc",
     "glibc",
+    "macos",
 ];
 
 /// Whether `name` is a non-empty archive stem of `[A-Za-z0-9._+-]`.
@@ -573,9 +592,13 @@ pub enum Linker {
         overridden: bool,
         glibc: Option<Version2>,
     },
+    /// An Apple target: the deployment target rustc links for
+    /// ([`deployment_target_from_rustc`]).
+    Apple { deployment_target: Option<Version2> },
 }
 
-/// Whether `linker` can link `archive`: the toolset or glibc is at least the archive's.
+/// Whether `linker` can link `archive`: the toolset, glibc or macOS deployment target is at
+/// least the archive's.
 pub fn check_linker(archive: &Archive, linker: &Linker) -> Result<(), Unavailable> {
     match linker {
         Linker::Msvc(found) => {
@@ -602,6 +625,33 @@ pub fn check_linker(archive: &Archive, linker: &Linker) -> Result<(), Unavailabl
                 return Err(Unavailable::GlibcTooOld { have, need });
             }
         }
+        Linker::Apple { deployment_target } => {
+            let have = deployment_target.ok_or(Unavailable::MacosUnknown)?;
+            let need = archive.macos.ok_or(Unavailable::MacosUnknown)?;
+            if have < need {
+                return Err(Unavailable::MacosTooOld { have, need });
+            }
+        }
     }
     Ok(())
+}
+
+/// The deployment target in the output of `rustc --print deployment-target`: one line
+/// `MACOSX_DEPLOYMENT_TARGET=<version>` (or `deployment_target=<version>` from older rustc).
+/// A patch component is dropped, which can only make the target look older. `None` for any
+/// other output.
+pub fn deployment_target_from_rustc(output: &str) -> Option<Version2> {
+    let mut lines = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let line = lines.next()?;
+    if lines.next().is_some() {
+        return None;
+    }
+    let (key, value) = line.split_once('=')?;
+    if key != "MACOSX_DEPLOYMENT_TARGET" && key != "deployment_target" {
+        return None;
+    }
+    Version2::parse(value)
 }

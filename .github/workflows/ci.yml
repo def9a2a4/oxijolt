@@ -90,9 +90,8 @@ jobs:
       # The build script's release-archive path: the native prefix packed as an archive and
       # served on 127.0.0.1, every fallback in auto and require mode, the cache. The xtask tests
       # cover the list, the unpacking and curl; Linux also runs them in the bindings job.
-      # Releases carry no macOS archives, so macOS has no download path to check.
       - name: Prebuilt download
-        if: matrix.features == '' && runner.os != 'macOS'
+        if: matrix.features == ''
         run: bash scripts/check_prebuilt_download.sh "$JOLTC_LIB_DIR"
       - name: xtask tests
         if: matrix.features == '' && runner.os == 'Windows'

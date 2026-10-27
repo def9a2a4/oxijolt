@@ -109,11 +109,11 @@ signature or layout is a real difference in the inputs and is investigated first
 ## Releases
 The owner cuts a release: set the same `version` in both crates' `Cargo.toml`, commit, and push the tag
 `v<version>` (without the `+jolt-…` build metadata). The `Release` workflow does the rest:
-1. builds the 16 native archives (x86_64 Windows MSVC and Linux GNU, eight feature subsets each) from the
-   tagged commit;
+1. builds the 24 native archives (x86_64 Windows MSVC and Linux GNU, aarch64 macOS, eight feature subsets
+   each) from the tagged commit;
 2. writes their sha256 into `crates/oxijolt-sys/prebuilt.txt` with `cargo xtask prebuilt-list`, as one commit
-   by github-actions[bot] on top of the tag, and checks without a write token that both packaged crates build
-   from the archives without CMake;
+   by github-actions[bot] on top of the tag, and checks without a write token, on Linux and macOS, that both
+   packaged crates build from the archives without CMake;
 3. attaches the archives and their `.sha256` files to the tag's GitHub release;
 4. pushes that commit to `release/v<version>`;
 5. publishes from it (see Publishing).
@@ -131,12 +131,12 @@ that may push `release/v*`.
 ## Publishing
 The Release workflow publishes through `publish.yml` (`Publish to crates.io`), which also runs by hand with
 `ref=release/v<version>`. It checks that the ref is the tag commit plus `prebuilt.txt` only, that every public
-release asset matches the list, and that both packages build from the real download without CMake; then it
-publishes `oxijolt-sys` and `oxijolt` in that order with `CARGO_REGISTRY_TOKEN`. A crate already on
-crates.io is skipped; a published `oxijolt-sys` with another `prebuilt.txt` fails the run and needs a new
-version. docs.rs builds the documentation without compiling or downloading Jolt: under `DOCS_RS` the build
-script uses the committed bindings only. Agents do not publish, tag, create releases or merge release
-branches.
+release asset matches the list, and that both packages build from the real download without CMake on Linux
+and macOS; then it publishes `oxijolt-sys` and `oxijolt` in that order with `CARGO_REGISTRY_TOKEN`. A crate
+already on crates.io is skipped; a published `oxijolt-sys` with another `prebuilt.txt` fails the run and
+needs a new version. docs.rs builds the documentation without compiling or downloading Jolt: under `DOCS_RS`
+the build script uses the committed bindings only. Agents do not publish, tag, create releases or merge
+release branches.
 
 ## Review checklist (every change)
 - Every new `unsafe` has a `SAFETY` comment; every new C function has a Rust safe wrapper with a test.
