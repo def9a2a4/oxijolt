@@ -2,7 +2,7 @@
 
 All notable changes to this fork. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 1.3.0 — 2026-10-27
 
 - `WorldSettings::penetration_slop` and `speculative_contact_distance` set Jolt's penetration
   slop and speculative contact distance per world, in metres (default 0.02 m, Jolt's;
