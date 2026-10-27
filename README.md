@@ -151,7 +151,7 @@ same results at every thread count. oxijolt and Rapier each kept 7 of 10 scenes 
 quality bounds (with each engine's defaults Rapier 8, oxijolt 7); oxijolt lets some capsules
 through the ground and its plank towers collapse. oxijolt brings
 Jolt's character controller, wheeled and tracked vehicles and ragdolls; outside x86_64 Windows
-and Linux it needs a C++ toolchain, and it has no WASM target.
+and Linux and Apple silicon it needs a C++ toolchain, and it has no WASM target.
 
 ## Documentation
 
