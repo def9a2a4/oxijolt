@@ -5,9 +5,9 @@ All notable changes to this fork. The format follows [Keep a Changelog](https://
 ## Unreleased
 
 - CI builds and tests macOS on Apple silicon (`aarch64-apple-darwin`, Apple clang) in the same
-  five configurations as Windows and Linux, together with the playground, the engine comparison
-  and the real-mesh checks. macOS still builds Jolt from source: the releases carry no macOS
-  archive.
+  five configurations as Windows and Linux, together with the playground and the real-mesh
+  checks. macOS still builds Jolt from source: the releases carry no macOS archive. The engine
+  comparison stays on Windows and Linux, where its harness reads CPU time and memory.
 
 ## 1.2.0 — 2026-10-21
 

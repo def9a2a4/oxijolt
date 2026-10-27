@@ -845,7 +845,8 @@ Checked on 2026-10-07 against oxijolt at this commit, rapier3d 0.36.0 (tag `v0.3
 - **No WASM.** This binding has no WebAssembly target ([targets](../crates/oxijolt-sys/build/targets.rs)),
   although Jolt itself builds for it. Rapier runs a WASM test in CI and has JavaScript bindings.
 - **macOS** is built and tested in CI on Apple silicon, from source: the releases carry no macOS
-  archive ([roadmap](../README.md#roadmap)).
+  archive ([roadmap](../README.md#roadmap)). This comparison runs on Windows and Linux only: its
+  harness reads CPU time and memory from those two systems.
 - **Same results across operating systems** are an opt-in feature that CI does not check yet;
   Rapier tests a snapshot on native and WASM targets.
 - **Save and restore** covers the same world with an unchanged structure only ([state](state.md)).

@@ -242,6 +242,7 @@ jobs:
   # each engine's hello binary built and run alone, and the campaign script's tests against a fake
   # harness. The full benchmark runs by hand (docs/comparison.md). Its native library is the test
   # job's default one.
+  # Not on macOS: the harness reads CPU time and memory only from Windows and Linux (src/os.rs).
   comparison:
     name: comparison ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -249,7 +250,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest]
     defaults:
       run:
         shell: bash
