@@ -7,7 +7,7 @@ use super::access::corners;
 use super::load::require;
 use super::{
     has_finite_inverse, mass_properties, with_locked_body, with_read_locked_body, Activation,
-    BodyMut, MotionType, INERTIA_RULE, KINEMATIC_MESH_MASS_RULE, MESH_DYNAMIC_RULE,
+    BodyMut, MassOverride, MotionType, INERTIA_RULE, KINEMATIC_MESH_MASS_RULE, MESH_DYNAMIC_RULE,
     SENSOR_SHAPE_RULE, STATIC_SHAPE_RULE,
 };
 use crate::limits::{is_mass, is_vertex_inverse_mass, MASS_RULE};
@@ -22,8 +22,8 @@ pub(crate) struct ShapeUse {
     /// become kinematic or dynamic.
     pub(crate) can_move: bool,
     pub(crate) sensor: bool,
-    /// The mass the body is given, or `None` for the shape's own.
-    pub(crate) mass: Option<f32>,
+    /// The mass, and maybe the inertia, the body is given, or `None` for the shape's own.
+    pub(crate) mass: Option<MassOverride>,
 }
 
 /// Checks that a body used as `using` describes may take `shape`, and returns the mass
@@ -229,7 +229,7 @@ impl BodyMut<'_> {
                 motion_type: before.motion_type,
                 can_move: before.can_move,
                 sensor: before.sensor,
-                mass,
+                mass: mass.map(MassOverride::Mass),
             },
         )?;
 

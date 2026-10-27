@@ -8,7 +8,8 @@ use oxijolt_sys::*;
 
 use super::PART_MOTION_RULE;
 use crate::body::{
-    has_finite_inverse, mass_properties, CreationSettings, INERTIA_RULE, STATIC_SHAPE_RULE,
+    has_finite_inverse, mass_properties, CreationSettings, MassOverride, INERTIA_RULE,
+    STATIC_SHAPE_RULE,
 };
 use crate::limits::{self, MASS_RULE};
 use crate::owned::{JoltObject, Owned};
@@ -304,6 +305,10 @@ impl RagdollSettings {
     /// Like [`new`](Self::new), then Jolt's `Stabilize`: it keeps the total mass of every chain
     /// but bounds each parent/child mass ratio to `[0.8, 1.2]` and raises parent inertias, which
     /// makes the joints stiffer. The parts' masses change.
+    ///
+    /// Also fails with [`RagdollError::InvalidValue`] when a part's body has a provided inertia
+    /// ([`BodySettings::mass_and_inertia`]): `Stabilize` scales it with the part's new mass, which
+    /// can take it below the rules it was checked against.
     pub fn new_stabilized(
         skeleton: &Skeleton,
         parts: &[RagdollPart<'_>],
@@ -317,6 +322,12 @@ impl RagdollSettings {
         stabilize: bool,
     ) -> Result<Self, RagdollError> {
         validate_parts(skeleton, parts)?;
+        let provided_inertia = |part: &RagdollPart<'_>| {
+            matches!(part.body.mass, Some(MassOverride::MassAndInertia { .. }))
+        };
+        if stabilize && parts.iter().any(provided_inertia) {
+            return Err(RagdollError::InvalidValue(PROVIDED_INERTIA_STABILIZE_RULE));
+        }
         let bound = effective_mass_bound(parts, stabilize);
         let springs_fit = parts
             .iter()
@@ -437,6 +448,10 @@ impl RagdollSettings {
         &self.object_layers
     }
 }
+
+/// Why [`RagdollSettings::new_stabilized`] refuses a part with a provided inertia.
+const PROVIDED_INERTIA_STABILIZE_RULE: &str =
+    "stabilized ragdoll parts take no provided inertia: Stabilize rescales it with the part's new mass";
 
 /// Every check of [`RagdollSettings::new`], before Jolt is called.
 fn validate_parts(skeleton: &Skeleton, parts: &[RagdollPart<'_>]) -> Result<(), RagdollError> {

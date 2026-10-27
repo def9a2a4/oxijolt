@@ -184,7 +184,7 @@ mod world;
 
 pub use body::{
     Activation, AllowedDofs, BodyId, BodyMut, BodyPose, BodyRef, BodySettings, BuoyancySettings,
-    MotionQuality, MotionType,
+    Inertia, MotionQuality, MotionType,
 };
 pub use character::{
     BodyVelocity, CharacterContact, CharacterContactKey, CharacterContactListener,

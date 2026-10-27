@@ -436,3 +436,123 @@ fn dofs_without_translation_are_refused() {
         assert_eq!(settings.validate_values(), Ok(()));
     }
 }
+
+/// A unit quaternion turning `angle` radians about the normalized `axis`.
+fn rotation_about(axis: [f32; 3], angle: f32) -> Quat {
+    let length = axis.iter().map(|c| c * c).sum::<f32>().sqrt();
+    let (sin, cos) = (0.5 * angle).sin_cos();
+    let [x, y, z] = axis.map(|c| c / length * sin);
+    Quat::from_xyzw(x, y, z, cos)
+}
+
+/// The rotation matrix of `q` in rows, in `f64`.
+fn rotation_matrix(q: Quat) -> [[f64; 3]; 3] {
+    let [x, y, z, w] = [q.x, q.y, q.z, q.w].map(f64::from);
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+/// The inverse of `m` by cofactors, in `f64`.
+fn inverse(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let cofactor = |i: usize, j: usize| {
+        let (r0, r1) = ((i + 1) % 3, (i + 2) % 3);
+        let (c0, c1) = ((j + 1) % 3, (j + 2) % 3);
+        m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0]
+    };
+    let det: f64 = (0..3).map(|j| m[0][j] * cofactor(0, j)).sum();
+    std::array::from_fn(|i| std::array::from_fn(|j| cofactor(j, i) / det))
+}
+
+/// `r · m · rᵀ` in `f64`.
+fn rotate_tensor(r: [[f64; 3]; 3], m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            (0..3)
+                .flat_map(|k| (0..3).map(move |l| (k, l)))
+                .map(|(k, l)| r[i][k] * m[k][l] * r[j][l])
+                .sum()
+        })
+    })
+}
+
+/// The world inverse inertia (in rows) and the inverse mass Jolt keeps for the dynamic `id`.
+fn inverse_mass_properties(world: &PhysicsWorld, id: BodyId) -> ([[f64; 3]; 3], f32) {
+    with_read_locked_body(world.body_lock_interface, id, |body| {
+        let mut matrix = ZERO_MASS_PROPERTIES.inertia;
+        // SAFETY: `body` is locked for reading for the duration of the closure and dynamic, so it
+        // has motion properties; the getters only read it and write the live local.
+        let inverse_mass = unsafe {
+            JPH_Body_GetInverseInertia(body.as_ptr(), &mut matrix);
+            JPH_MotionProperties_GetInverseMassUnchecked(JPH_Body_GetMotionProperties(
+                body.as_ptr(),
+            ))
+        };
+        let [x, y, z, _] = matrix.column;
+        let rows = [[x.x, y.x, z.x], [x.y, y.y, z.y], [x.z, y.z, z.z]];
+        (rows.map(|row| row.map(f64::from)), inverse_mass)
+    })
+    .unwrap()
+}
+
+/// Checks that bodies of a 2 x 0.5 x 1 m box given `inertia` and 3 kg, unrotated and rotated,
+/// get the world inverse inertia of the provided tensor within `tolerance` of its Frobenius norm,
+/// and a different one than the same box given only the mass.
+fn check_provided_inertia_reaches_jolt(inertia: Inertia, tolerance: f64) {
+    let mut world = PhysicsWorld::new(crate::WorldSettings::default()).unwrap();
+    let shape = Shape::new_box(Vec3::new(1.0, 0.25, 0.5)).unwrap();
+    let tensor = inertia.tensor().map(|row| row.map(f64::from));
+    for rotation in [Quat::IDENTITY, rotation_about([0.3, -0.5, 0.8], 0.7)] {
+        let provided = BodySettings::new_dynamic()
+            .rotation(rotation)
+            .mass_and_inertia(3.0, inertia);
+        let id = world.create_body(&shape, &provided).unwrap();
+        let (actual, inverse_mass) = inverse_mass_properties(&world, id);
+        let r = rotation_matrix(rotation);
+        let expected = rotate_tensor(r, inverse(tensor));
+        let norm = expected.iter().flatten().map(|v| v * v).sum::<f64>().sqrt();
+        for (a, e) in actual.iter().flatten().zip(expected.iter().flatten()) {
+            assert!(
+                (a - e).abs() <= tolerance * norm,
+                "{actual:?} vs {expected:?}"
+            );
+        }
+        assert_eq!(inverse_mass, 1.0 / 3.0_f32);
+
+        let scaled = BodySettings::new_dynamic().rotation(rotation).mass(3.0);
+        let id = world.create_body(&shape, &scaled).unwrap();
+        let (from_shape, _) = inverse_mass_properties(&world, id);
+        let difference = from_shape
+            .iter()
+            .flatten()
+            .zip(expected.iter().flatten())
+            .map(|(a, e)| (a - e).abs())
+            .fold(0.0, f64::max);
+        assert!(difference > 0.1 * norm, "the shape's inertia was used");
+    }
+}
+
+#[test]
+fn provided_principal_inertia_reaches_the_motion_properties() {
+    check_provided_inertia_reaches_jolt(Inertia::Principal(Vec3::new(1.0, 2.0, 4.0)), 1.0e-6);
+}
+
+#[test]
+fn provided_tensor_inertia_reaches_the_motion_properties() {
+    let tensor = [[2.0, 0.5, 0.0], [0.5, 3.0, 0.0], [0.0, 0.0, 4.0]];
+    check_provided_inertia_reaches_jolt(Inertia::Tensor(tensor), 1.0e-5);
+}

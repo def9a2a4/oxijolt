@@ -1263,3 +1263,27 @@ fn part_masses_and_velocities_are_bounded() {
         ));
     }
 }
+
+#[test]
+fn provided_inertia_on_a_ragdoll_part() {
+    let (mut world, layers) = ragdoll_world(1);
+    let shapes = part_shapes();
+    let mut parts = humanoid_parts(&shapes, layers.ragdoll);
+    let inertia = Inertia::Principal(Vec3::new(0.03, 0.02, 0.03));
+    parts[HEAD].body = parts[HEAD].body.clone().mass_and_inertia(5.0, inertia);
+    let settings = RagdollSettings::new(&skeleton(), &parts).unwrap();
+    let ragdoll = world
+        .create_ragdoll(&settings, None, Activation::Activate)
+        .unwrap();
+    let head = world.ragdoll(ragdoll).unwrap().body_ids()[HEAD];
+    assert!((world.body(head).unwrap().mass().unwrap() - 5.0).abs() <= 5.0e-6);
+    match RagdollSettings::new_stabilized(&skeleton(), &parts) {
+        Err(RagdollError::InvalidValue(rule)) => {
+            assert!(
+                rule.contains("stabilized ragdoll parts take no provided inertia"),
+                "{rule}"
+            )
+        }
+        other => panic!("{other:?}"),
+    }
+}

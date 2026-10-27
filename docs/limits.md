@@ -717,6 +717,40 @@ chain whose masses `Stabilize` redistributes) create and step seeded rotated sle
 thinnest thickness the floor accepts and check that one 1e-4 thinner is refused; each aborts with
 the floor divided by 6 and passes with it divided by 3.
 
+## Provided inertia
+
+`BodySettings::mass_and_inertia` hands Jolt the tensor as given
+(`EOverrideMassProperties::MassAndInertiaProvided`, `BodyCreationSettings.cpp:213-215`), with no
+shape to bound it, so `PhysicsWorld::create_body` checks it in `f64` against four rules, after the
+mass rule:
+
+1. Every entry is finite and `I[i][j] == I[j][i]`.
+2. Floor. A diagonal tensor (every off-diagonal entry exactly 0) is decomposed exactly
+   (`EigenValueSymmetric` returns it unchanged), so each diagonal entry must be at least
+   `MIN_PROVIDED_INERTIA`, 1e-6 kg·m². Then the moment vector is longer than 1e-6, Jolt's
+   near-zero fallback to unit-sphere inertia (`Vec3::IsNearZero` in `MotionProperties.cpp:46-56`)
+   never triggers, and every principal inverse inertia is at most 1e6, inside the `√3 · 1e6` that
+   [Character weight and push](#character-weight-and-push) assumes. An upper bound alone bounds no
+   inverse inertia: `(1e-30, 1, 1)` has a finite tensor and an inverse moment of 1e30. For a tensor
+   that is not diagonal, `det I / (sum of the principal 2 × 2 minors)`, a lower bound of its
+   smallest principal moment, must be at least `MIN_PROVIDED_INERTIA + 8 · u · |I|_F`
+   (`u = 2^-24`): the moment Jolt's `f32` decomposition returns is within the residual bound
+   `8 u |I|_F` of [Soft body inertia](#soft-body-inertia) of the exact one. Jolt reads the `f32`
+   entries as given, so no further error term applies.
+3. Ceiling. Every moment is at most `6 · mass · MAX_SHAPE_EXTENT²`. A body of that mass whose
+   points lie within `MAX_SHAPE_EXTENT` of its centre of mass on every axis has the trace
+   `2 Σ m |r|² <= 6 · mass · MAX_SHAPE_EXTENT²`, so this keeps a provided tensor within what a
+   shape the crate accepts can produce, and every bound derived from masses and extents still
+   holds. A diagonal tensor is checked per moment; for another tensor the Frobenius norm, at
+   least its largest moment, must be at most the ceiling, which refuses some tensors an exact
+   eigenvalue check would accept.
+4. A tensor that is not diagonal must pass the rule of [Rigid body inertia](#rigid-body-inertia):
+   positive definite, with `det I / minors` at least `1001 · 8 · u · |I|_F`.
+
+`RagdollSettings::new_stabilized` refuses parts with a provided inertia: `Ragdoll::Stabilize`
+multiplies the tensor by the part's new mass over its old (`Ragdoll.cpp:130-140`), which can take a
+moment below the floor. `BodyMut::set_shape` computes the inertia from the new shape again.
+
 ## Soft body inertia
 
 Jolt sums a soft body's inertia tensor about the body origin in `f32` from its vertices
