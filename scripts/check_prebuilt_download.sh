@@ -3,6 +3,8 @@
 #
 # Usage: bash scripts/check_prebuilt_download.sh <prefix>
 #
+# Hosts: Windows (MSVC), Linux (GNU) and macOS on Apple silicon.
+#
 # <prefix> is a native prefix for the host target with the default features (what
 # JOLTC_LIB_DIR takes). The script packs it as a release archive, writes an archive list for
 # it into crates/oxijolt-sys/prebuilt.txt (restored on exit), serves the archive with
@@ -14,7 +16,7 @@
 #
 # Every cargo run has CMAKE and CXX pointing at programs that do not exist, so a source build
 # fails as soon as it starts CMake, and a success proves that the download path needs neither.
-# Requires bash, cargo, curl, tar, python (3) and a checkout with its submodules.
+# Requires Bash 3.2 or newer, cargo, curl, tar, python (3) and a checkout with its submodules.
 set -euo pipefail
 
 prefix=${1:?usage: check_prebuilt_download.sh <prefix>}
@@ -28,6 +30,24 @@ checksum_file="$repo/crates/oxijolt-sys/.cargo-checksum.json"
 # A path for native programs (python, cargo), which do not read MSYS paths on Windows.
 native() {
   if command -v cygpath > /dev/null; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
+}
+
+# Rewrites a file with a sed script (BSD sed has no portable in-place edit).
+edit() {
+  sed "$1" "$2" > "$2.tmp" && mv "$2.tmp" "$2"
+}
+
+sha256_of() {
+  if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d ' ' -f 1
+}
+
+# A gzipped tar without macOS metadata (AppleDouble `._` entries), which the build script refuses.
+pack() {
+  if [ "$os" = macos ]; then
+    COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf "$@"
+  else
+    tar -czf "$@"
+  fi
 }
 
 python=$(command -v python3 || command -v python)
@@ -91,10 +111,11 @@ cp "$repo/crates/oxijolt-sys/vendor/JoltPhysics/LICENSE" "$stage/licenses/JoltPh
 case "$host" in
   *-windows-msvc) os=windows; provenance="compiler: MSVC 19.0.0" ;;
   *-linux-gnu) os=linux; provenance=$'compiler: GNU 12\nglibc: 2.17' ;;
+  *-apple-darwin) os=macos; provenance=$'compiler: AppleClang 17.0.0\nmacos: 11.0' ;;
   *) echo "no archives for $host"; exit 1 ;;
 esac
 printf 'source: test@%s\n%s\n' "$head" "$provenance" > "$stage/PROVENANCE.txt"
-(cd "$work/stage" && tar -czf "../www/good/$name.tar.gz" "$name")
+(cd "$work/stage" && pack "../www/good/$name.tar.gz" "$name")
 cp "$work/www/good/$name.tar.gz" "$work/www/bad/$name.tar.gz"
 "$python" -c 'import sys; p = sys.argv[1]; b = bytearray(open(p, "rb").read()); b[-1] ^= 1; open(p, "wb").write(b)' \
   "$(native "$work/www/bad/$name.tar.gz")"
@@ -105,12 +126,13 @@ refused_stage="$work/stage/refused/$name"
 rm -rf "$work/stage/refused"
 mkdir -p "$work/stage/refused"
 cp -R "$stage" "$refused_stage"
-sed -i 's/^double_precision=OFF/double_precision=ON/' "$refused_stage/oxijolt-sys-manifest.txt"
-(cd "$work/stage/refused" && tar -czf "../../www/refused/$name.tar.gz" "$name")
+edit 's/^double_precision=OFF/double_precision=ON/' "$refused_stage/oxijolt-sys-manifest.txt"
+(cd "$work/stage/refused" && pack "../../www/refused/$name.tar.gz" "$name")
 
 # Every cargo child starts from the same environment: nothing of the caller's archive
 # settings leaks in, CMake and the C++ compiler are missing, the local server is not proxied,
-# and the output has no colour codes for the checks to trip over.
+# and the output has no colour codes for the checks to trip over. Arrays that may be empty
+# expand as ${a[@]+"${a[@]}"}: before 4.4, Bash calls an empty "${a[@]}" unbound under `set -u`.
 case_env=()
 cargo_in() {
   local dir=$1
@@ -118,7 +140,7 @@ cargo_in() {
   env -u JOLTC_LIB_DIR -u JOLTC_PREBUILT -u JOLTC_PREBUILT_URL -u CARGO_NET_OFFLINE \
     -u NIX_BUILD_TOP -u RUSTC_LINKER -u DOCS_RS -u RUSTFLAGS -u CARGO_TARGET_DIR \
     CMAKE=oxijolt-no-cmake CXX=oxijolt-no-cxx NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
-    CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$(native "$work/$dir")" "${case_env[@]}" cargo "$@"
+    CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$(native "$work/$dir")" ${case_env[@]+"${case_env[@]}"} cargo "$@"
 }
 
 (cd "$repo" && env -u CARGO_TARGET_DIR cargo fetch --locked > /dev/null)
@@ -127,7 +149,7 @@ cargo_in() {
   --url http://127.0.0.1:1 --commit "$head")
 cp "$list" "$work/good.txt"
 printf 'format=1\n' > "$work/placeholder.txt"
-refused_sha=$(sha256sum "$work/www/refused/$name.tar.gz" | cut -d ' ' -f 1)
+refused_sha=$(sha256_of "$work/www/refused/$name.tar.gz")
 sed "s/^\(archive=[^ ]* sha256=\)[0-9a-f]*/\1$refused_sha/" "$work/good.txt" > "$work/refused.txt"
 
 use_list() {
@@ -160,7 +182,7 @@ check() {
     problems+=("$made requests, expected $want_requests")
   fi
   local rerun_pattern='Running `[^`]*oxijolt-sys-[0-9a-f]+[/\\]build-script-build'
-  for c in "${checks[@]}"; do
+  for c in ${checks[@]+"${checks[@]}"}; do
     case "$c" in
       has:*) grep -qF -- "${c#has:}" "$log" || problems+=("missing '${c#has:}'") ;;
       lacks:*) ! grep -qF -- "${c#lacks:}" "$log" || problems+=("unexpected '${c#lacks:}'") ;;
@@ -188,11 +210,11 @@ fallback() {
   shift 4
   check "$row-auto" "$dir" fail "$want_requests" "has:$source_build: $reason" "has:$cmake_started" -- \
     check --locked -p oxijolt-sys "$@"
-  local saved=("${case_env[@]}")
+  local saved=(${case_env[@]+"${case_env[@]}"})
   case_env+=(JOLTC_PREBUILT=require)
   check "$row-require" "$dir" fail "$want_requests" "has:JOLTC_PREBUILT=require: $reason" \
     "lacks:$cmake_started" -- check --locked -p oxijolt-sys "$@"
-  case_env=("${saved[@]}")
+  case_env=(${saved[@]+"${saved[@]}"})
 }
 
 start_server
@@ -224,18 +246,28 @@ use_list "$work/sources.txt"
 fallback sources "the native sources differ from the released ones" 0 t_no
 use_list "$work/good.txt"
 fallback no-archive "no archive for this target, CRT and features" 0 t_no --features asserts
-if [ "$os" = windows ]; then
-  case_env=(JOLTC_PREBUILT_URL="$good_url" RUSTFLAGS=-Ctarget-feature=+crt-static)
-  fallback crt-static "crt-static is enabled" 0 t_crt
-  case_env=(JOLTC_PREBUILT_URL="$good_url" RUSTC_LINKER=lld-link)
-  sed 's/msvc=[0-9.]*/msvc=14.99/' "$work/good.txt" > "$work/toolchain.txt"
-  too_old="MSVC toolset"
-else
-  case_env=(JOLTC_PREBUILT_URL="$good_url" RUSTC_LINKER=clang)
-  sed 's/glibc=[0-9.]*/glibc=9.99/' "$work/good.txt" > "$work/toolchain.txt"
-  too_old="glibc"
-fi
-fallback linker-override "a linker or sysroot override is set" 0 t_no
+case "$os" in
+  windows)
+    case_env=(JOLTC_PREBUILT_URL="$good_url" RUSTFLAGS=-Ctarget-feature=+crt-static)
+    fallback crt-static "crt-static is enabled" 0 t_crt
+    case_env=(JOLTC_PREBUILT_URL="$good_url" RUSTC_LINKER=lld-link)
+    fallback linker-override "a linker or sysroot override is set" 0 t_no
+    sed 's/msvc=[0-9.]*/msvc=14.99/' "$work/good.txt" > "$work/toolchain.txt"
+    too_old="MSVC toolset"
+    ;;
+  linux)
+    case_env=(JOLTC_PREBUILT_URL="$good_url" RUSTC_LINKER=clang)
+    fallback linker-override "a linker or sysroot override is set" 0 t_no
+    sed 's/glibc=[0-9.]*/glibc=9.99/' "$work/good.txt" > "$work/toolchain.txt"
+    too_old="glibc"
+    ;;
+  macos)
+    # Apple targets have no linker-override refusal; the archive's minimum macOS is compared
+    # with the deployment target rustc links for.
+    sed 's/macos=[0-9.]*/macos=99.0/' "$work/good.txt" > "$work/toolchain.txt"
+    too_old="macOS deployment target"
+    ;;
+esac
 case_env=(JOLTC_PREBUILT_URL="$good_url")
 use_list "$work/toolchain.txt"
 fallback toolchain "$too_old" 0 t_no
@@ -272,7 +304,7 @@ check off t_no fail 0 "has:$cmake_started" "lacks:$source_build" -- check --lock
 mismatched="$work/stage/mismatched"
 rm -rf "$mismatched"
 cp -R "$prefix" "$mismatched"
-sed -i 's/^double_precision=OFF/double_precision=ON/' "$mismatched/oxijolt-sys-manifest.txt"
+edit 's/^double_precision=OFF/double_precision=ON/' "$mismatched/oxijolt-sys-manifest.txt"
 case_env=(JOLTC_PREBUILT_URL="$good_url" JOLTC_PREBUILT=require JOLTC_LIB_DIR="$(native "$mismatched")")
 check lib-dir-mismatch t_no fail 0 "has:different configuration" -- check --locked -p oxijolt-sys
 case_env=(JOLTC_PREBUILT_URL="$good_url" JOLTC_PREBUILT=require JOLTC_LIB_DIR="$(native "$prefix")")
@@ -297,6 +329,11 @@ check download-require t_ok ok + "has:$success" "lacks:$cmake_started" -- "${smo
 stop_server
 touch "$list"
 check cached t_ok ok 0 reran "has:$success" -- "${smoke[@]}"
+if [ "$os" = macos ]; then
+  # Another deployment target reruns the build script, which keeps the cached archive.
+  case_env=(JOLTC_PREBUILT_URL="$good_url" JOLTC_PREBUILT=require MACOSX_DEPLOYMENT_TARGET=12.0)
+  check deployment-target-rerun t_ok ok 0 reran "has:$success" -- "${smoke[@]}"
+fi
 case_env=(JOLTC_PREBUILT_URL="$good_url" JOLTC_PREBUILT=require PATH="$work/empty-bin:$PATH")
 check cached-new-path t_ok ok 0 reran "has:$success" -- "${smoke[@]}"
 flipped=0
