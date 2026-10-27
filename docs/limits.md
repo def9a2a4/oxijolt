@@ -372,14 +372,49 @@ equal bytes and that a restored shape saves the bytes it came from.
   (`Body/MotionProperties.h:192,196`). A larger count would wrap.
 - 0 position steps is Jolt's own way to turn the position pass off.
 
-The counts are written once, in `PhysicsWorld::new`, through joltc's
-`JPH_PhysicsSystem_SetPhysicsSettings`. joltc copies every field of its `JPH_PhysicsSettings` both
+The counts and the two [contact distances](#contact-distances) are written once, in
+`PhysicsWorld::new`, through joltc's `JPH_PhysicsSystem_SetPhysicsSettings`. joltc copies every
+field of its `JPH_PhysicsSettings` both
 ways; the one Jolt field it lacks, `mInternalEdgeRemovalVertexToleranceSq`, is set to Jolt's default,
 which oxijolt never changes. `world_settings_leave_every_other_physics_setting_at_jolts_default` checks
 that every other field still holds Jolt's default after the write. The bounds are checked
 by `step_counts_outside_jolts_range_are_refused` and `step_counts_read_back_from_jolt`; a five-cube
 stack at 2 velocity and 0 position steps stays finite and above the floor for 60 steps
 (`a_stack_without_position_steps_stays_finite`).
+
+## Contact distances
+
+`WorldSettings::penetration_slop` and `speculative_contact_distance` are between 0 and
+`MAX_SHAPE_EXTENT` (2000 m), the rule of `CollideShape::max_separation_distance`, which is the same
+Jolt quantity. Both default to Jolt's 0.02 m and are written once, in `PhysicsWorld::new`.
+
+What Jolt does with them:
+- The slop is added to a contact's separation, and the solver's position pass corrects only the
+  separation that stays negative (`ContactConstraintManager.cpp:1904-1909`). It is a tolerance, not
+  a target depth: an overlap within it is left as it is, and with 0 position steps nothing is
+  corrected. It also caps how far a linear-cast body may move into another
+  (`PhysicsSystem.cpp:1671`).
+- The speculative distance widens the broad-phase pairing (`PhysicsSystem.cpp:967`), is the
+  narrow phase's maximum separation for pairs without a sensor (`:1101`) and widens manifold
+  building (`:1212`, `:1297`).
+
+`contact_tuning.rs` measures both. A sphere of radius 0.5 dropped from 3 m and 5 m (centre height)
+peaks above 0.03 m inside the floor; it comes to rest at about 0.02 m with the default slop and
+within 0.005 m + 1e-4 m with a slop of 0.005 (`a_deep_impact_is_corrected_down_to_the_slop`). Placed
+0.01 m above the floor, it rests less than 0.005 m deep with the default slop
+(`a_gently_placed_sphere_rests_within_the_slop_not_at_it`). The 1e-4 m is an allowance for these
+fixtures. A sphere 0.05 m above the floor gets an added contact with a depth of about -0.05 m in its
+first step with a speculative distance of 0.1 m and none with 0.02 m
+(`speculative_contacts_reach_bodies_within_the_distance`).
+
+At the bounds, two cube stacks and a sphere complete 120 steps with finite state for the six
+combinations of 0, 0.02 and 2000 m that
+`contact_distances_at_their_bounds_keep_a_small_scene_finite` runs, and two spheres 1998 m apart
+with a speculative distance of 2000 m get their far contact and stay finite over steps of 1/60 s and
+1 ms (`far_bodies_within_the_speculative_distance_stay_finite`). Both tests also pass with Jolt's
+asserts on. They cover these fixtures, not arbitrary scenes. A large speculative distance pairs many
+bodies, so size `WorldSettings::max_body_pairs` and `max_contact_constraints` for it
+([capacity](#contact-constraint-capacity)).
 
 ## Accelerations
 
