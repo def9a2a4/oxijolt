@@ -84,7 +84,9 @@ start_server() {
     > "$server_log" 2>&1 &
   server_pid=$!
   local port=
-  for _ in $(seq 100); do
+  # Up to a minute: the server prints its port only after a reverse lookup of its address
+  # (`socket.getfqdn`), which can take seconds on macOS.
+  for _ in $(seq 600); do
     port=$(sed -n 's/.*port \([0-9]*\).*/\1/p' "$server_log" | head -n 1)
     [ -n "$port" ] && break
     sleep 0.1
