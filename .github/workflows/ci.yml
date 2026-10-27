@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
         features: ["", "cross-platform-deterministic", "double-precision", "debug-renderer", "asserts"]
         # These entries add feature_args to the rows of both operating systems.
         # The debug renderer is a feature of the safe crate (it forwards to oxijolt-sys);
@@ -108,7 +108,8 @@ jobs:
           else
             nm --defined-only "$JOLTC_LIB_DIR"/lib/libjoltc*.a > "$RUNNER_TEMP/joltc.nm"
             nm -C --defined-only "$JOLTC_LIB_DIR"/lib/libJolt.a > "$RUNNER_TEMP/jolt.nm"
-            grep -q ' T JPH_DebugRenderer_Create$' "$RUNNER_TEMP/joltc.nm" && joltc=yes
+            # Mach-O prefixes C symbols with an underscore.
+            grep -q -E ' T _?JPH_DebugRenderer_Create$' "$RUNNER_TEMP/joltc.nm" && joltc=yes
             grep -q 'DebugRendererSimple::DrawGeometry' "$RUNNER_TEMP/jolt.nm" && jolt=yes
           fi
           expected=no; [ "${{ matrix.features }}" = debug-renderer ] && expected=yes
