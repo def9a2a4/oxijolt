@@ -599,3 +599,104 @@ fn a_reached_speed_can_refuse_a_change_valid_from_rest() {
     // Both tracks below it, but the synchronisation can move both speeds onto one track.
     assert!(refuses([0.75 * ceiling, 0.75 * ceiling]));
 }
+
+/// The corners of the track speeds `bound` allows: each `|ω|` up to its speed, and the weighted
+/// speed with the bound's inertias up to its weighted bound. Every allowed state lies in their
+/// convex hull, so a linear bound that holds at the corners holds for all of them.
+fn corners(bound: &TrackSpeedBound) -> Vec<[f64; 2]> {
+    let [s0, s1] = bound.speeds;
+    let [i0, i1] = bound.inertias;
+    let w = bound.weighted;
+    // The largest speed of one track with the other at `other`.
+    let first = |other: f64| s0.min(((w - other / i1) * i0).max(0.0));
+    let second = |other: f64| s1.min(((w - other / i0) * i1).max(0.0));
+    vec![
+        [0.0, 0.0],
+        [first(0.0), 0.0],
+        [0.0, second(0.0)],
+        [first(second(0.0)), second(0.0)],
+        [first(0.0), second(first(0.0))],
+    ]
+}
+
+/// Whether `bound` covers `state`: each speed and the weighted speed with the bound's inertias.
+fn covers(bound: &TrackSpeedBound, state: [f64; 2]) -> bool {
+    let weighted = state[0] / bound.inertias[0] + state[1] / bound.inertias[1];
+    (0..2).all(|side| state[side] <= bound.speeds[side])
+        && weighted <= bound.weighted * (1.0 + 1e-12)
+}
+
+#[test]
+fn rescaled_weighted_bounds_take_either_operand() {
+    let reached = |speeds: [f64; 2], weighted: f64, inertias: [f64; 2]| TrackSpeedBound {
+        speeds,
+        weighted,
+        inertias,
+    };
+    // Both tracks were fast, never at once: the weighted bound is the smaller operand.
+    let both = reached([10.0, 10.0], 12.0, [1.0, 1.0]);
+    // One track was much faster: the speeds give the smaller operand once the fast track gets
+    // the heavier inertia.
+    let one = reached([1.0, 100.0], 101.0, [1.0, 1.0]);
+    let cases = [
+        (both, [2.0, 0.5], 24.0),
+        (both, [2.0, 2.0], 6.0),
+        (one, [1.0, 100.0], 2.0),
+        (one, [100.0, 1.0], 100.01),
+        (one, [0.5, 0.25], 402.0),
+    ];
+    for (bound, inertia, expected) in cases {
+        let rescaled = bound.weighted_with(inertia);
+        assert!(
+            (rescaled - expected).abs() <= 1e-12 * expected,
+            "{bound:?} {inertia:?}"
+        );
+        let moved = TrackSpeedBound {
+            weighted: rescaled,
+            inertias: inertia,
+            ..bound
+        };
+        for corner in corners(&bound) {
+            assert!(covers(&moved, corner), "{corner:?} under {moved:?}");
+        }
+    }
+}
+
+#[test]
+fn successive_unequal_inertia_changes_cover_every_earlier_state() {
+    let tracks = [
+        (10.0, 10.0),
+        (1.0, 50.0),
+        (50.0, 1.0),
+        (2.0, 0.5),
+        (50.0, 1.0),
+    ];
+    let mut bound = TrackSpeedBound::AT_REST;
+    let mut earlier = Vec::new();
+    for (step, (left, right)) in tracks.into_iter().enumerate() {
+        let settings = with_inertias(left, right);
+        assert_eq!(
+            settings.validate_from(LAYERS, &bound),
+            Ok(()),
+            "step {step}"
+        );
+        // The tracks were driven fast in between: well above what the drivetrain reaches.
+        let driven = settings.track_speed_bound(&bound);
+        let fast = TrackSpeedBound {
+            speeds: driven.speeds.map(|speed| 3.0 * speed),
+            weighted: 2.0 * driven.weighted,
+            ..driven
+        };
+        earlier.extend(corners(&fast));
+        bound = settings.track_speed_bound(&fast);
+        // A state restored from any earlier configuration stays inside the bound.
+        for &state in &earlier {
+            assert!(
+                covers(&bound, state),
+                "step {step}: {state:?} under {bound:?}"
+            );
+        }
+        // The same configuration again keeps the bound.
+        assert_eq!(settings.track_speed_bound(&bound), bound, "step {step}");
+    }
+}

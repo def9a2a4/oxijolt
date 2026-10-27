@@ -549,10 +549,7 @@ impl TrackedVehicleSettings {
         self.tracks()
             .into_iter()
             .flat_map(|track| track.wheels.iter().map(move |wheel| (track.inertia, wheel)))
-            .map(|(inertia, wheel)| {
-                let radius = f64::from(wheel.base.radius);
-                f64::from(inertia) / (radius * radius) * chassis.inverse_effective_mass(&wheel.base)
-            })
+            .map(|(inertia, wheel)| chassis.mass_ratio(inertia, &wheel.base))
             .fold(0.0, f64::max)
     }
 
@@ -670,7 +667,8 @@ impl TrackSpeedBound {
     }
 }
 
-/// A tracked vehicle's chassis as its [track mass ratio](limits::MAX_TRACK_MASS_RATIO) needs it.
+/// A vehicle's chassis as the [track mass ratio](limits::MAX_TRACK_MASS_RATIO) and the
+/// [wheel mass ratio](limits::MAX_WHEEL_MASS_RATIO) need it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ChassisMass {
     /// The chassis' inverse mass and principal inverse inertia.
@@ -682,6 +680,14 @@ pub(crate) struct ChassisMass {
 }
 
 impl ChassisMass {
+    /// The mass ratio of `wheel` on this chassis when the ground feels the moment of inertia
+    /// `inertia` turning it: `inertia` over the wheel's radius squared, times the chassis'
+    /// [largest inverse effective mass](Self::inverse_effective_mass) at the wheel.
+    pub(super) fn mass_ratio(&self, inertia: f32, wheel: &WheelBase) -> f64 {
+        let radius = f64::from(wheel.radius);
+        f64::from(inertia) / (radius * radius) * self.inverse_effective_mass(wheel)
+    }
+
     /// The largest inverse effective mass of the chassis where `wheel` can push it along any
     /// direction in the wheel's forward/up plane, which holds Jolt's longitudinal direction for
     /// every ground normal: the lever is taken at the farthest point the wheel's contact can

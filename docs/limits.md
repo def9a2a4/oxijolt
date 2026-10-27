@@ -1146,6 +1146,56 @@ Not covered:
   ground friction 1000, rubble of 1 and 10 kg and a 1 kg slab brought the chassis to the clamp in up
   to 9 of 384 runs per hull (at most 1 with tracks of 1e-3 kg·m²).
 
+## Wheel mass ratio
+
+Under each unbraked wheel in contact, Jolt sizes the longitudinal impulse as the
+[track mass ratio](#track-mass-ratio) describes for tracks, with the wheel's own inertia:
+`(ω − v/r)·I/r`, the slip times the wheel's mass `M = I/r²` at the ground
+(`WheeledVehicleController.cpp:705-718`). It then clamps the accumulated impulse to the tire's
+longitudinal cap and turns the wheel back by what it applied. Each such correction leaves the
+slip at `−M·w` times what it was, `w` the chassis' inverse effective mass at the contact along the
+longitudinal direction. As one row of Jolt's iteration this is a Gauss-Seidel step relaxed by
+`1 + M·w`: the iteration keeps converging while every wheel's `M·w` is below 1 (relaxation below
+2), whatever the caps, and above it overshoots further on every pass. Jolt's default cap, the
+tire's friction times the suspension impulse, stops a heavy wheel's overshoot early; a callback's
+caps need not.
+
+`VehicleMut::set_tire_max_impulse_callback` computes `M·w` for every wheel of a wheeled vehicle or
+motorcycle as `create_tracked_vehicle` does for tracks (the largest `w` over the wheel's
+forward/up plane, at the farthest contact any tester gives), from the chassis' mass properties of
+creation, which cannot change while the vehicle exists, and refuses the callback when any wheel's
+exceeds `MAX_WHEEL_MASS_RATIO` (1). Wheels cannot change after creation either. Jolt's
+`MotorcycleTest` motorcycle (240 kg, wheels of 0.9 kg·m²) has a ratio of 0.99; a 1500 kg
+1.8 × 0.6 × 4 m box car with its centre of mass in the middle and the same wheels, 0.068.
+
+Measured with infinite caps through the safe API in the default build, for 16 chassis (150, 400,
+1500 and 4000 kg; a 1.8 × 0.6 × 4 m box with the centre of mass in the middle or on the bottom
+face, a narrow flat 1 × 0.2 × 2 m box, a 3 × 1.2 × 6 m box with the centre of mass moved up and
+forward), wheels of radius 0.2, 0.35 and 0.8, ray, sphere and cylinder testers, on flat ground and a
+23° slope, from 10 m/s through throttle, full steering, brakes, hand brake and reverse or inputs
+that flip every step, at 1/240, 1/60 and 0.1 s for 4 s (at most 400 steps), with the wheel
+inertia scaled to a given ratio: 1728 runs per ratio. A run failed when the chassis came within
+10 % of Jolt's angular velocity clamp (15π rad/s), above 400 m/s, or to exactly zero velocity (an
+overflowing clamp).
+- With near-massless wheels (ratio 0.01), 3 runs failed: the narrow flat chassis spins up at full
+  steering with infinite grip.
+- At ratios of 0.25, 0.5, 1 and 1.25: 1, 1, 2 and 0 runs failed, all on the narrow flat chassis.
+- At 1.5, 2, 3, 4 and 6: 4, 76, 642, 1197 and 1639.
+
+That 1500 kg box car passed at a ratio of 2.3 (wheels of 30 kg·m²) and failed at 3.0
+(40 kg·m²); at 76 (1000 kg·m²) infinite or `f32::MAX` caps sent it to the 500 m/s clamp in the
+first step and to NaN in the third.
+
+Not covered:
+- Steps longer than 0.1 s.
+- A dynamic body under the wheels adds its inverse mass to `w`, which the ratio does not count.
+  The 1500 kg car with its centre of mass on the bottom face, at a ratio of 0.5, drove over six
+  slabs of 1, 10 or 100 kg at 1/60 s with infinite caps without failing; nothing more was
+  measured.
+- Jolt's default caps with a heavy wheel and a huge friction curve: friction curve values are not
+  bounded, and a 1500 kg chassis on wheels of 1000 kg·m² with friction 1e30 was thrown 395 m up
+  while settling, without any callback.
+
 ## Motorcycle lean
 
 **Lean angle.** With the lean steering limit on, Jolt limits the steering angle to

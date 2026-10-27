@@ -85,7 +85,9 @@ impl Scene {
                 let car = world.create_wheeled_vehicle(body, &settings).unwrap();
                 let mut vehicle = world.vehicle_mut(car).unwrap();
                 vehicle.set_gravity(GRAVITY).unwrap();
-                vehicle.set_tire_max_impulse_callback(slip_grip(grip, Arc::clone(&calls)));
+                vehicle
+                    .set_tire_max_impulse_callback(slip_grip(grip, Arc::clone(&calls)))
+                    .unwrap();
                 chassis.push(body);
                 car
             })
@@ -101,7 +103,8 @@ impl Scene {
                 world
                     .vehicle_mut(bike)
                     .unwrap()
-                    .set_tire_max_impulse_callback(slip_grip(grip, Arc::clone(&calls)));
+                    .set_tire_max_impulse_callback(slip_grip(grip, Arc::clone(&calls)))
+                    .unwrap();
                 chassis.push(body);
                 bike
             })

@@ -1,7 +1,7 @@
 //! Tire max impulse callbacks of a car and a motorcycle: the caps they return change the drive,
 //! Jolt's default formula through a callback matches no callback bit for bit, invalid caps
-//! count as 0, unbounded caps step finitely, panics are resumed by `step`, and callbacks live as
-//! long as their vehicle.
+//! count as 0, unbounded caps step finitely, wheels heavy against their chassis refuse a callback,
+//! panics are resumed by `step`, and callbacks live as long as their vehicle.
 
 mod common;
 
@@ -168,7 +168,8 @@ fn zero_tire_impulse_gives_no_drive() {
         .world
         .vehicle_mut(scene.id)
         .unwrap()
-        .set_tire_max_impulse_callback(no_grip);
+        .set_tire_max_impulse_callback(no_grip)
+        .unwrap();
     run(&mut scene, 0, 120, |_| throttle());
     let speed = horizontal_speed(&scene.world, scene.chassis);
     assert!(speed < 1.0e-3, "{speed}");
@@ -193,7 +194,8 @@ fn default_formula_matches<K: Rig>() {
         .world
         .vehicle_mut(through.id)
         .unwrap()
-        .set_tire_max_impulse_callback(|input| input.default_max_impulse());
+        .set_tire_max_impulse_callback(|input| input.default_max_impulse())
+        .unwrap();
     let a = run(&mut plain, 0, 120, drive_and_steer);
     let b = run(&mut through, 0, 120, drive_and_steer);
     assert_eq!(first_difference(&a, &b), None);
@@ -244,7 +246,8 @@ fn reduced_lateral_grip_widens_the_turn() {
                         lateral: 0.2 * default.lateral,
                         ..default
                     }
-                });
+                })
+                .unwrap();
         }
         run(&mut scene, 120, 60, turn);
         // Distance over turned angle of the path in the last 20 ticks.
@@ -286,7 +289,8 @@ fn invalid_outputs_count_as_zero() {
         zero.world
             .vehicle_mut(zero.id)
             .unwrap()
-            .set_tire_max_impulse_callback(with(longitudinal, 0.0));
+            .set_tire_max_impulse_callback(with(longitudinal, 0.0))
+            .unwrap();
         let expected = run(&mut zero, 0, 60, drive_and_steer);
         for value in [f32::NAN, -1.0, f32::NEG_INFINITY] {
             let mut scene = WheeledVehicle::scene();
@@ -294,7 +298,8 @@ fn invalid_outputs_count_as_zero() {
                 .world
                 .vehicle_mut(scene.id)
                 .unwrap()
-                .set_tire_max_impulse_callback(with(longitudinal, value));
+                .set_tire_max_impulse_callback(with(longitudinal, value))
+                .unwrap();
             let actual = run(&mut scene, 0, 60, drive_and_steer);
             assert_eq!(
                 first_difference(&expected, &actual),
@@ -335,7 +340,8 @@ fn unbounded_caps<K: Rig>(cap: f32) {
         .set_tire_max_impulse_callback(move |_| TireMaxImpulse {
             longitudinal: cap,
             lateral: cap,
-        });
+        })
+        .unwrap();
     for tick in 0..150 {
         let input = match tick {
             0..40 => ride(1.0, 0.0),
@@ -373,6 +379,147 @@ fn unbounded_caps_stay_finite() {
     }
 }
 
+/// A box chassis of `mass` (half extents 0.9, 0.3, 2.0, centre of mass in its middle) on four
+/// wheels of radius 0.35 and moment of inertia `inertia`, settled on flat ground for a second.
+fn heavy_wheel_car(mass: f32, inertia: f32) -> (PhysicsWorld, BodyId, VehicleId) {
+    let mut world = PhysicsWorld::new(WorldSettings::default()).unwrap();
+    let floor = Shape::new_box(Vec3::new(500.0, 1.0, 500.0)).unwrap();
+    let ground = BodySettings::new_static().position(RVec3::new(0.0, -1.0, 0.0));
+    world.create_body(&floor, &ground).unwrap();
+    let hull = Shape::new_box(Vec3::new(0.9, 0.3, 2.0)).unwrap();
+    let body = BodySettings::new_dynamic()
+        .mass(mass)
+        .allow_sleeping(false)
+        .position(RVec3::new(0.0, 1.0, 0.0));
+    let chassis = world.create_body(&hull, &body).unwrap();
+    let wheel = |x: f32, z: f32| {
+        WheelSettings::new(Vec3::new(x, -0.1, z))
+            .radius(0.35)
+            .inertia(inertia)
+    };
+    let settings = WheeledVehicleSettings::new(
+        vec![
+            wheel(0.9, 1.4),
+            wheel(-0.9, 1.4),
+            wheel(0.9, -1.4),
+            wheel(-0.9, -1.4),
+        ],
+        vec![VehicleDifferentialSettings::new(Some(0), Some(1))],
+        VehicleCollisionTester::ray(ObjectLayer::MOVING),
+    );
+    let id = world.create_wheeled_vehicle(chassis, &settings).unwrap();
+    step(&mut world, 60);
+    (world, chassis, id)
+}
+
+/// Caps of `cap` in both directions.
+fn caps_of(cap: f32) -> impl Fn(&TireMaxImpulseInput) -> TireMaxImpulse {
+    move |_| TireMaxImpulse {
+        longitudinal: cap,
+        lateral: cap,
+    }
+}
+
+/// Whether the vehicle is finite and its chassis below Jolt's velocity clamps (500 m/s,
+/// 15π rad/s), which an overflowing clamp would leave at exactly zero.
+fn is_unclamped(world: &PhysicsWorld, id: VehicleId) -> bool {
+    let chassis = world.body(world.vehicle(id).unwrap().body()).unwrap();
+    let length = |v: Vec3| (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
+    let speed = length(chassis.linear_velocity());
+    let spin = length(chassis.angular_velocity());
+    is_finite(world, id) && speed < 400.0 && spin < 40.0 && speed > 0.0
+}
+
+/// Drives the car from 10 m/s through throttle, full steering, brakes and reverse in steps of
+/// `dt`, and asserts after every step that it stays finite and below the clamps.
+fn drive_from_10_m_s(world: &mut PhysicsWorld, chassis: BodyId, id: VehicleId, dt: f32) {
+    let mut body = world.body_mut(chassis).unwrap();
+    body.set_linear_velocity(Vec3::new(0.0, 0.0, 10.0)).unwrap();
+    let steps = (4.0 / dt).round() as usize;
+    for tick in 0..steps {
+        let input = match 4 * tick / steps {
+            0 => ride(1.0, 0.0),
+            1 => ride(1.0, 1.0),
+            2 => DriverInput {
+                brake: 1.0,
+                right: -1.0,
+                ..DriverInput::default()
+            },
+            _ => ride(-1.0, -0.5),
+        };
+        world
+            .vehicle_mut(id)
+            .unwrap()
+            .set_driver_input(input)
+            .unwrap();
+        assert!(world.step(dt).unwrap().is_complete());
+        assert!(is_unclamped(world, id), "dt {dt}, tick {tick}");
+    }
+}
+
+#[test]
+fn wheels_heavy_against_the_chassis_refuse_a_callback() {
+    for inertia in [1000.0, 1.0e25] {
+        let (mut world, chassis, id) = heavy_wheel_car(1500.0, inertia);
+        for cap in [f32::INFINITY, f32::MAX] {
+            let refused = world
+                .vehicle_mut(id)
+                .unwrap()
+                .set_tire_max_impulse_callback(caps_of(cap));
+            assert!(
+                matches!(refused, Err(VehicleError::InvalidValue(what)) if what.contains("MAX_WHEEL_MASS_RATIO")),
+                "{refused:?}"
+            );
+            assert!(!world.vehicle(id).unwrap().has_tire_max_impulse_callback());
+        }
+        // Jolt's own caps keep such wheels finite.
+        drive_from_10_m_s(&mut world, chassis, id, DT);
+    }
+}
+
+/// The heaviest wheel inertia the car of `mass` takes a callback with, within 0.1 %.
+fn heaviest_accepted_inertia(mass: f32) -> f32 {
+    let accepts = |inertia: f32| {
+        let (mut world, _, id) = heavy_wheel_car(mass, inertia);
+        let accepted = world
+            .vehicle_mut(id)
+            .unwrap()
+            .set_tire_max_impulse_callback(caps_of(f32::INFINITY))
+            .is_ok();
+        accepted
+    };
+    let (mut light, mut heavy) = (0.9, 1000.0);
+    assert!(accepts(light) && !accepts(heavy), "mass {mass}");
+    while heavy > 1.001 * light {
+        let middle = (light * heavy).sqrt();
+        if accepts(middle) {
+            light = middle;
+        } else {
+            heavy = middle;
+        }
+    }
+    light
+}
+
+#[test]
+fn the_heaviest_accepted_wheels_with_unbounded_caps_stay_finite() {
+    for mass in [1500.0, 300.0] {
+        let inertia = heaviest_accepted_inertia(mass);
+        eprintln!("{mass} kg chassis: wheels up to {inertia} kg m^2 take a callback");
+        for cap in [f32::INFINITY, f32::MAX] {
+            for dt in [DT, 0.1] {
+                let (mut world, chassis, id) = heavy_wheel_car(mass, inertia);
+                world
+                    .vehicle_mut(id)
+                    .unwrap()
+                    .set_tire_max_impulse_callback(caps_of(cap))
+                    .unwrap();
+                drive_from_10_m_s(&mut world, chassis, id, dt);
+            }
+        }
+    }
+}
+
 #[test]
 fn the_callback_sees_contacting_wheels() {
     let mut scene = WheeledVehicle::scene();
@@ -386,7 +533,8 @@ fn the_callback_sees_contacting_wheels() {
         .set_tire_max_impulse_callback(move |input| {
             record.lock().unwrap().push((input.wheel, input.delta_time));
             input.default_max_impulse()
-        });
+        })
+        .unwrap();
     for _ in 0..10 {
         let report = scene
             .world
@@ -412,10 +560,12 @@ fn the_callback_sees_contacting_wheels() {
     let count = Arc::clone(&calls);
     let mut vehicle = world.vehicle_mut(id).unwrap();
     vehicle.set_driver_input(throttle()).unwrap();
-    vehicle.set_tire_max_impulse_callback(move |input| {
-        count.fetch_add(1, Ordering::Relaxed);
-        input.default_max_impulse()
-    });
+    vehicle
+        .set_tire_max_impulse_callback(move |input| {
+            count.fetch_add(1, Ordering::Relaxed);
+            input.default_max_impulse()
+        })
+        .unwrap();
     step(&mut world, 30);
     assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
@@ -429,7 +579,7 @@ fn clear_restores_jolts_default() {
 
     scene.world.restore_state(&saved).unwrap();
     let mut vehicle = scene.world.vehicle_mut(scene.id).unwrap();
-    vehicle.set_tire_max_impulse_callback(no_grip);
+    vehicle.set_tire_max_impulse_callback(no_grip).unwrap();
     vehicle.clear_tire_max_impulse_callback();
     // Clearing twice does nothing.
     vehicle.clear_tire_max_impulse_callback();
@@ -481,7 +631,8 @@ fn a_panicking_callback_panics_out_of_step_and_the_world_stays_usable() {
         .world
         .vehicle_mut(scene.id)
         .unwrap()
-        .set_tire_max_impulse_callback(|_| panic!("tire callback panic"));
+        .set_tire_max_impulse_callback(|_| panic!("tire callback panic"))
+        .unwrap();
     for _ in 0..3 {
         let payload = catch_unwind(AssertUnwindSafe(|| scene.world.step(DT)))
             .expect_err("the callback panics in every step");
@@ -502,7 +653,8 @@ fn a_panicking_callback_panics_out_of_step_and_the_world_stays_usable() {
         .world
         .vehicle_mut(scene.id)
         .unwrap()
-        .set_tire_max_impulse_callback(|input| input.default_max_impulse());
+        .set_tire_max_impulse_callback(|input| input.default_max_impulse())
+        .unwrap();
     step(&mut scene.world, 30);
     scene
         .world
@@ -511,12 +663,14 @@ fn a_panicking_callback_panics_out_of_step_and_the_world_stays_usable() {
         .world
         .vehicle_mut(scene.id)
         .unwrap()
-        .set_tire_max_impulse_callback(|_| panic!("tire callback panic"));
+        .set_tire_max_impulse_callback(|_| panic!("tire callback panic"))
+        .unwrap();
     scene
         .world
         .vehicle_mut(second)
         .unwrap()
-        .set_tire_max_impulse_callback(|_| panic_any(PanicsOnDrop));
+        .set_tire_max_impulse_callback(|_| panic_any(PanicsOnDrop))
+        .unwrap();
     let payload = catch_unwind(AssertUnwindSafe(|| scene.world.step(DT)))
         .expect_err("the listener and both callbacks panic");
     assert_eq!(message(&*payload), "contact listener panic");
@@ -527,7 +681,8 @@ fn a_panicking_callback_panics_out_of_step_and_the_world_stays_usable() {
             .world
             .vehicle_mut(id)
             .unwrap()
-            .set_tire_max_impulse_callback(|input| input.default_max_impulse());
+            .set_tire_max_impulse_callback(|input| input.default_max_impulse())
+            .unwrap();
     }
     for _ in 0..60 {
         for id in [scene.id, second] {
@@ -560,7 +715,8 @@ fn after_a_panic_the_step_uses_jolts_default() {
             }
             later.fetch_add(1, Ordering::Relaxed);
             TireMaxImpulse::default()
-        });
+        })
+        .unwrap();
     WheeledVehicle::input(&mut panicking.world, panicking.id, throttle());
     let payload = catch_unwind(AssertUnwindSafe(|| panicking.world.step(DT)))
         .expect_err("the first call panics");
@@ -595,14 +751,18 @@ fn callbacks_are_dropped_with_replace_clear_remove_and_world_drop() {
     };
     let mut scene = WheeledVehicle::scene();
     let mut vehicle = scene.world.vehicle_mut(scene.id).unwrap();
-    vehicle.set_tire_max_impulse_callback(holding(&token));
+    vehicle
+        .set_tire_max_impulse_callback(holding(&token))
+        .unwrap();
     assert_eq!(Arc::strong_count(&token), 2);
     run(&mut scene, 0, 10, |_| throttle());
     let mut vehicle = scene.world.vehicle_mut(scene.id).unwrap();
-    vehicle.set_tire_max_impulse_callback(no_grip);
+    vehicle.set_tire_max_impulse_callback(no_grip).unwrap();
     assert_eq!(Arc::strong_count(&token), 1, "replace");
 
-    vehicle.set_tire_max_impulse_callback(holding(&token));
+    vehicle
+        .set_tire_max_impulse_callback(holding(&token))
+        .unwrap();
     vehicle.clear_tire_max_impulse_callback();
     assert_eq!(Arc::strong_count(&token), 1, "clear");
 
@@ -610,7 +770,8 @@ fn callbacks_are_dropped_with_replace_clear_remove_and_world_drop() {
     bike.world
         .vehicle_mut(bike.id)
         .unwrap()
-        .set_tire_max_impulse_callback(holding(&token));
+        .set_tire_max_impulse_callback(holding(&token))
+        .unwrap();
     run(&mut bike, 0, 10, |_| throttle());
     assert_eq!(Arc::strong_count(&token), 2);
     bike.world.remove_vehicle(bike.id).unwrap();
@@ -620,7 +781,8 @@ fn callbacks_are_dropped_with_replace_clear_remove_and_world_drop() {
         .world
         .vehicle_mut(scene.id)
         .unwrap()
-        .set_tire_max_impulse_callback(holding(&token));
+        .set_tire_max_impulse_callback(holding(&token))
+        .unwrap();
     run(&mut scene, 10, 10, |_| throttle());
     drop(scene);
     assert_eq!(Arc::strong_count(&token), 1, "world drop");
@@ -664,15 +826,18 @@ fn distinct_callbacks_per_vehicle() {
         .set_tire_max_impulse_callback(move |input| {
             stuck_counter(input);
             TireMaxImpulse::default()
-        });
+        })
+        .unwrap();
     world
         .vehicle_mut(free)
         .unwrap()
-        .set_tire_max_impulse_callback(move |input| free_counter(input));
+        .set_tire_max_impulse_callback(move |input| free_counter(input))
+        .unwrap();
     world
         .vehicle_mut(bike)
         .unwrap()
-        .set_tire_max_impulse_callback(move |input| bike_counter(input));
+        .set_tire_max_impulse_callback(move |input| bike_counter(input))
+        .unwrap();
     for _ in 0..90 {
         for id in [stuck, free] {
             WheeledVehicle::input(&mut world, id, throttle());
@@ -694,7 +859,8 @@ fn callback_survives_restore_and_rebase() {
         .world
         .vehicle_mut(scene.id)
         .unwrap()
-        .set_tire_max_impulse_callback(no_grip);
+        .set_tire_max_impulse_callback(no_grip)
+        .unwrap();
     run(&mut scene, 0, 10, |_| throttle());
     let saved = scene.world.save_state();
     run(&mut scene, 10, 30, |_| throttle());

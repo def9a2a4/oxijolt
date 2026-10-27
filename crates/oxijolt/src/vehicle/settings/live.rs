@@ -170,6 +170,18 @@ impl LiveDrivetrain {
         }
     }
 
+    /// The largest [wheel mass ratio](limits::MAX_WHEEL_MASS_RATIO) of a wheeled vehicle's or
+    /// a motorcycle's wheels on `chassis`, as derived in [docs/limits.md#wheel-mass-ratio].
+    ///
+    /// [docs/limits.md#wheel-mass-ratio]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#wheel-mass-ratio
+    pub(crate) fn largest_wheel_mass_ratio(&self, chassis: &ChassisMass) -> f64 {
+        self.wheeled()
+            .wheels
+            .iter()
+            .map(|wheel| chassis.mass_ratio(wheel.inertia, &wheel.base))
+            .fold(0.0, f64::max)
+    }
+
     /// The differentials last applied.
     pub(crate) fn differentials(&self) -> &[VehicleDifferentialSettings] {
         &self.wheeled().differentials

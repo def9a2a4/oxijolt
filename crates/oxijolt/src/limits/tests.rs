@@ -261,6 +261,10 @@ fn principal_levers_measure_the_lever_with_the_inverse_inertia() {
     assert!(is_track_mass_ratio(bound));
     assert!(!is_track_mass_ratio(bound.next_up()));
     assert!(!is_track_mass_ratio(f64::NAN));
+    let bound = f64::from(MAX_WHEEL_MASS_RATIO);
+    assert!(is_wheel_mass_ratio(bound));
+    assert!(!is_wheel_mass_ratio(bound.next_up()));
+    assert!(!is_wheel_mass_ratio(f64::NAN));
 }
 
 #[test]

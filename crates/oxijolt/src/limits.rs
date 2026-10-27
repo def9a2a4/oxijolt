@@ -237,6 +237,23 @@ pub const MAX_TRACK_INERTIA_RATIO: f32 = 100.0;
 /// [docs/limits.md#track-mass-ratio]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#track-mass-ratio
 pub const MAX_TRACK_MASS_RATIO: f32 = 0.25;
 
+/// Largest wheel mass ratio of a wheeled vehicle's or a motorcycle's wheel for a tire max impulse
+/// callback: the wheel's moment of inertia over its radius squared, divided by the smallest
+/// effective mass of the chassis where the wheel pushes it, measured as for
+/// [`MAX_TRACK_MASS_RATIO`].
+///
+/// Jolt sizes each wheel's driving impulse for the wheel alone, as if the chassis did not move,
+/// and bounds it only by the tire's cap. Above a ratio of 1 the solver overshoots further on
+/// every iteration, and caps far above friction times the suspension impulse let it diverge.
+/// [`VehicleMut::set_tire_max_impulse_callback`] refuses a callback for a vehicle with any wheel
+/// above this bound. Jolt's `MotorcycleTest` motorcycle has a ratio of 0.99.
+///
+/// See [docs/limits.md#wheel-mass-ratio].
+///
+/// [`VehicleMut::set_tire_max_impulse_callback`]: crate::VehicleMut::set_tire_max_impulse_callback
+/// [docs/limits.md#wheel-mass-ratio]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#wheel-mass-ratio
+pub const MAX_WHEEL_MASS_RATIO: f32 = 1.0;
+
 /// Largest lever-arm ratio a world constraint may give a dynamic body: how far the point where
 /// the constraint holds the body lies from its centre of mass, measured against the body's own
 /// size.
@@ -822,6 +839,16 @@ pub(crate) const TRACK_MASS_RATIO_RULE: &str =
 /// Whether `ratio` is at most [`MAX_TRACK_MASS_RATIO`]; false for NaN.
 pub(crate) fn is_track_mass_ratio(ratio: f64) -> bool {
     ratio <= f64::from(MAX_TRACK_MASS_RATIO)
+}
+
+/// What a vehicle's wheels must satisfy on their chassis for a tire max impulse callback
+/// ([`is_wheel_mass_ratio`]).
+pub(crate) const WHEEL_MASS_RATIO_RULE: &str =
+    "a wheel is too heavy for its chassis for a tire callback: see limits::MAX_WHEEL_MASS_RATIO";
+
+/// Whether `ratio` is at most [`MAX_WHEEL_MASS_RATIO`]; false for NaN.
+pub(crate) fn is_wheel_mass_ratio(ratio: f64) -> bool {
+    ratio <= f64::from(MAX_WHEEL_MASS_RATIO)
 }
 
 /// The inverse mass and the principal inverse inertia of a dynamic body, in `f64`.

@@ -77,11 +77,15 @@ fn vehicle_round(world: &mut PhysicsWorld, layers: &CarLayers, shape: &Shape, ro
         })
         .unwrap();
     vehicle.set_gravity(GRAVITY).unwrap();
-    vehicle.set_tire_max_impulse_callback(|input| input.default_max_impulse());
+    vehicle
+        .set_tire_max_impulse_callback(|input| input.default_max_impulse())
+        .unwrap();
     assert!(world.step(DT).unwrap().is_complete());
     assert_eq!(world.vehicle(car).unwrap().wheels().len(), 4);
     let mut vehicle = world.vehicle_mut(car).unwrap();
-    vehicle.set_tire_max_impulse_callback(|_| TireMaxImpulse::default());
+    vehicle
+        .set_tire_max_impulse_callback(|_| TireMaxImpulse::default())
+        .unwrap();
     vehicle.clear_tire_max_impulse_callback();
     vehicle
         .set_engine(VehicleEngineSettings::default().max_torque(600.0))

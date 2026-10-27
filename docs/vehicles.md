@@ -221,6 +221,14 @@ both slips, the collision step's length) and returns a `TireMaxImpulse` of two c
 `input.default_max_impulse()` is Jolt's formula. NaN and negative caps count as 0, and
 `f32::INFINITY` is no cap.
 
+Jolt sizes each wheel's drive impulse as if the chassis stood still, and at ordinary friction
+the default caps keep a wheel that is heavy against its chassis from overshooting. The callback is
+therefore refused, with `VehicleError::InvalidValue`, when a wheel's inertia over its radius
+squared is large against the chassis' effective mass at that wheel
+(`limits::MAX_WHEEL_MASS_RATIO`, [limits](limits.md#wheel-mass-ratio)). Jolt's `MotorcycleTest`
+motorcycle is just inside; a 1500 kg 1.8 × 0.6 × 4 m box on wheels of radius 0.35 m takes a
+callback with wheels up to about 13 kg·m².
+
 - **Threads.** The solver calls the closure for each wheel with ground contact in every velocity
   iteration it runs, on its worker threads, concurrently with other vehicles' callbacks but never
   with another call of the same vehicle. The closure is `Fn + Send + Sync + 'static`. The number
@@ -275,7 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     vehicle.set_tire_max_impulse_callback(|input| {
         let jolt = input.default_max_impulse();
         TireMaxImpulse { lateral: 1.5 * jolt.lateral, ..jolt }
-    });
+    })?;
 
     let input = DriverInput { forward: 1.0, ..DriverInput::default() };
     world.vehicle_mut(car)?.set_driver_input(input)?;

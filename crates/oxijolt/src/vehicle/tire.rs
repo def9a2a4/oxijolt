@@ -12,6 +12,7 @@ use oxijolt_sys::{
 
 use super::{VehicleMut, VehicleRef, WheeledControllerKind};
 use crate::panic_slot::PanicSlot;
+use crate::{limits, VehicleError};
 
 /// What Jolt hands a tire max impulse callback for one wheel with ground contact (see
 /// [`VehicleMut::set_tire_max_impulse_callback`]).
@@ -53,7 +54,8 @@ impl TireMaxImpulseInput {
 
 /// The caps a tire max impulse callback returns for one wheel, N·s. They bound the impulses the
 /// tire may apply on the ground in this collision step; the impulses Jolt applies can be lower.
-/// NaN and negative values count as 0; [`f32::INFINITY`] is no cap.
+/// NaN and negative values count as 0; [`f32::INFINITY`] is no cap. A vehicle takes a callback
+/// only while its wheels are light against its chassis ([`limits::MAX_WHEEL_MASS_RATIO`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TireMaxImpulse {
     /// Cap on the impulse along the wheel's forward direction, drive and brakes.
@@ -175,6 +177,10 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
     /// rewind its captured state. [`rebase`](crate::PhysicsWorld::rebase) keeps it too, since
     /// its input does not depend on the frame. The callback is dropped with the vehicle.
     ///
+    /// # Errors
+    /// [`VehicleError::InvalidValue`] when a wheel is heavy against the chassis
+    /// ([`limits::MAX_WHEEL_MASS_RATIO`]); the vehicle keeps Jolt's default caps.
+    ///
     /// # Example
     /// A tire with 80 % of Jolt's grip sideways:
     /// ```
@@ -200,7 +206,7 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
     /// world.vehicle_mut(car)?.set_tire_max_impulse_callback(|input| {
     ///     let default = input.default_max_impulse();
     ///     TireMaxImpulse { lateral: 0.8 * default.lateral, ..default }
-    /// });
+    /// })?;
     /// assert!(world.vehicle(car)?.has_tire_max_impulse_callback());
     /// assert!(world.step(1.0 / 60.0)?.is_complete());
     /// # Ok(())
@@ -209,7 +215,14 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
     pub fn set_tire_max_impulse_callback(
         &mut self,
         callback: impl Fn(&TireMaxImpulseInput) -> TireMaxImpulse + Send + Sync + 'static,
-    ) {
+    ) -> Result<(), VehicleError> {
+        let ratio = self
+            .entry
+            .drivetrain
+            .largest_wheel_mass_ratio(&self.entry.chassis);
+        if !limits::is_wheel_mass_ratio(ratio) {
+            return Err(VehicleError::InvalidValue(limits::WHEEL_MASS_RATIO_RULE));
+        }
         let tire = Box::new(TireCallback {
             callback: Box::new(callback),
             panic: PanicSlot::default(),
@@ -232,6 +245,7 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
             )
         };
         drop(replaced);
+        Ok(())
     }
 
     /// Removes the tire max impulse callback, so that the vehicle uses Jolt's default caps

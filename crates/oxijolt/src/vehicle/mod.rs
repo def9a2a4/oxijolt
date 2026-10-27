@@ -46,7 +46,7 @@ pub use id::{
 };
 pub use motorcycle::MotorcycleLean;
 pub use readout::{VehicleRef, WheelContact, WheelState};
-use settings::{BuiltSettings, LiveDrivetrain, WheelGeometry};
+use settings::{BuiltSettings, ChassisMass, LiveDrivetrain, WheelGeometry};
 pub use settings::{
     MotorcycleSettings, TrackedVehicleSettings, TrackedWheelSettings, VehicleAntiRollBar,
     VehicleCollisionTester, VehicleDifferentialSettings, VehicleEngineSettings,
@@ -95,6 +95,9 @@ pub(crate) struct VehicleEntry {
     tracks: Option<[Range<u32>; 2]>,
     /// The drivetrain configuration last applied, which Jolt's state does not hold.
     drivetrain: LiveDrivetrain,
+    /// The chassis' mass properties, which cannot change while the vehicle exists
+    /// (`check_not_owned`).
+    chassis: ChassisMass,
     /// The tire max impulse callback whose address the controller holds. Field order is drop
     /// order: the constraint, which holds the native function object with this address, is
     /// unregistered (`unregister_vehicle`) and released before the callback drops.
@@ -288,6 +291,7 @@ impl PhysicsWorld {
         if raw == u32::MAX {
             return Err(VehicleError::TooManyVehicles);
         }
+        let chassis = self.chassis_mass(body);
         let mut wheel_pointers: Vec<*mut JPH_WheelSettings> =
             built.wheels.iter().map(|wheel| wheel.as_base()).collect();
         let kind = built.controller.kind();
@@ -336,6 +340,7 @@ impl PhysicsWorld {
             kind,
             tracks: built.tracks,
             drivetrain,
+            chassis,
             tire_callback: None,
         };
         install_tester(&mut entry, built.collision_tester);

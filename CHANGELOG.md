@@ -32,10 +32,11 @@ All notable changes to this fork. The format follows [Keep a Changelog](https://
   (`VehicleMut::set_tire_max_impulse_callback`, `clear_tire_max_impulse_callback`,
   `VehicleRef::has_tire_max_impulse_callback`): a `Fn(&TireMaxImpulseInput) -> TireMaxImpulse`
   closure replaces Jolt's friction times suspension impulse caps of each wheel; NaN and negative
-  caps count as 0. It runs on the solver's threads, so it is `Send + Sync`, and its results do not
-  depend on the thread count as long as they depend only on the input and on data that does not
-  change during the step; a panic in it gives the vehicle Jolt's caps for the rest of the step and
-  is resumed by `step`. The callback is dropped with its vehicle and is not part of `WorldState`.
+  caps count as 0. The callback is refused for a vehicle whose wheels are heavy against its
+  chassis (`limits::MAX_WHEEL_MASS_RATIO`). It runs on the solver's threads, so it is
+  `Send + Sync`, and its results do not depend on the thread count as long as they depend only on
+  the input and on data that does not change during the step; a panic in it gives the vehicle
+  Jolt's caps for the rest of the step and is resumed by `step`. The callback is dropped with its vehicle and is not part of `WorldState`.
 - None of the live settings above is part of `WorldState`: a restore keeps the current ones
   ([state](docs/state.md#what-is-not-saved)).
 - The joltc extension adds `JPH_WheeledVehicleController_SetEngine`, `_SetTransmission`,
