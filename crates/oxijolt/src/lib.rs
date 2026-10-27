@@ -251,51 +251,51 @@ pub use vehicle::{
 pub use world::{PhysicsWorld, StepReport, WorldSettings};
 
 /// The repository's guide, `docs/guide.md`, whose examples run as doctests.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/guide.md")]
 pub struct Guide;
 
 /// The repository's README, whose example runs as a doctest.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../README.md")]
 pub struct Readme;
 
 /// The constraints guide, `docs/constraints.md`.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/constraints.md")]
 pub struct ConstraintsGuide;
 
 /// The soft body guide, `docs/soft-bodies.md`.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/soft-bodies.md")]
 pub struct SoftBodiesGuide;
 
 /// The events guide, `docs/events.md`.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/events.md")]
 pub struct EventsGuide;
 
 /// The body controls guide, `docs/bodies.md`.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/bodies.md")]
 pub struct BodiesGuide;
 
 /// The save and restore guide, `docs/state.md`.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/state.md")]
 pub struct StateGuide;
 
 /// The job system guide, `docs/job-system.md`.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/job-system.md")]
 pub struct JobSystemGuide;
 
 /// The shape cooking guide, `docs/shape-cooking.md`.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/shape-cooking.md")]
 pub struct ShapeCookingGuide;
 
 /// The vehicles guide, `docs/vehicles.md`.
-#[cfg(doctest)]
+#[cfg(all(doctest, repository_docs))]
 #[doc = include_str!("../../../docs/vehicles.md")]
 pub struct VehiclesGuide;

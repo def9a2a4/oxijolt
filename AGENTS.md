@@ -58,8 +58,9 @@ Layers, bottom to top:
 - `README.md` (a front page: what it is, an example, status, guarantees in short, links), `docs/coverage.md`
   (the feature table with its tests), `CHANGELOG.md` and the guides in `docs/` are brought up to date in a
   closing documentation step at the end of each body of work, against the code as it then is.
-- Rust code blocks in the README and the guides run as doctests (the `#[cfg(doctest)]` items at the end of
-  `crates/oxijolt/src/lib.rs`); a new guide with Rust code gets such an item.
+- Rust code blocks in the README and the guides run as doctests (the `#[cfg(all(doctest, repository_docs))]`
+  items at the end of `crates/oxijolt/src/lib.rs`; `crates/oxijolt/build.rs` sets `repository_docs` inside the
+  repository only, since the published package ships no guides); a new guide with Rust code gets such an item.
 - Docs that describe something the code no longer does are a bug.
 
 ## Build and test
