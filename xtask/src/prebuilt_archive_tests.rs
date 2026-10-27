@@ -105,6 +105,42 @@ fn a_good_archive_unpacks_with_its_marker_and_times() {
 }
 
 #[test]
+fn an_apple_archive_unpacks_with_unix_library_names() {
+    let name = "oxijolt-sys-1.2.0-aarch64-apple-darwin-default";
+    let libraries = ["libjoltc.a", "libJolt.a"];
+    let out = TempDir::new("unpack-apple");
+    let config = config("aarch64-apple-darwin", 0);
+    let bytes = release_archive(name, &config, COMMIT);
+    let archive = Archive {
+        name: name.to_owned(),
+        sha256: sha256(&bytes),
+        config,
+        msvc: None,
+        glibc: None,
+        macos: crate::prebuilt::Version2::parse("11.0"),
+    };
+    match verify_and_unpack(&bytes, &archive, ["joltc.lib", "Jolt.lib"], out.path()) {
+        Err(Unavailable::Unpack(reason)) => {
+            assert!(reason.contains("not a file of the archive"), "{reason}")
+        }
+        other => panic!("MSVC spelling: {other:?}"),
+    }
+    assert!(!out.path().join("prebuilt").exists());
+
+    let prefix = verify_and_unpack(&bytes, &archive, libraries, out.path()).expect("unpack");
+    assert_eq!(prefix, out.path().join("prebuilt").join(name));
+    assert_eq!(
+        fs::read(prefix.join("lib/libjoltc.a")).expect("read"),
+        b"joltc"
+    );
+    assert_eq!(
+        fs::read(prefix.join("lib/libJolt.a")).expect("read"),
+        b"Jolt"
+    );
+    assert_eq!(cached(out.path(), &archive, libraries), Some(prefix));
+}
+
+#[test]
 fn an_unpack_replaces_a_stale_prefix_and_staging_directory() {
     let out = TempDir::new("unpack-stale");
     let (bytes, archive) = good();
