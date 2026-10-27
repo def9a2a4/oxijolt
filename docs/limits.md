@@ -138,7 +138,7 @@ wide, set down 1 cm above a box floor base down or dome down, come to rest withi
 floor and fall asleep; convex radius 0 and 0.05 behave alike. Dropped tilted from 3 m, such a
 hull lands on its rim, tips over and slaps down: its far edge moves at the radius times the
 angular velocity (about 5 m/s for a 4 m dome), while Jolt's discrete step reacts to an approach
-only within its speculative contact distance (`mSpeculativeContactDistance`, 2 cm per step) and
+only within its speculative contact distance (`mSpeculativeContactDistance`, 2 cm per step by default) and
 `MotionQuality::LinearCast` sweeps the centre of mass's translation, not the rotation.
 
 Measured with twelve random tilts per hull, 60 Hz, no convex radius (`tests/thin_hulls.rs` keeps
@@ -234,8 +234,9 @@ own space and loses it under a box of half extent 300 m, where coordinates near 
 that, under `FLT_EPSILON · (E + longest edge)`, on each of the mesh's. The triangle rule counts
 that per corner, with `E` from `MeshSettings::max_convex_extent`: the largest absolute coordinate of a convex shape's local
 bounds (relative to its centre of mass, after scaling) plus the separation distance of a collide
-query. Bodies collide with Jolt's 0.02 m speculative contact distance, characters with their
-predictive contact distance; compound children count one by one. The sphere is collided in the
+query. Bodies collide with the world's speculative contact distance
+(`WorldSettings::speculative_contact_distance`, 0.02 m by default, [contact distances](#contact-distances)),
+characters with their predictive contact distance; compound children count one by one. The sphere is collided in the
 mesh's space instead (`CollideSphereVsTriangles`), which the rule covers too. Shape casts keep the
 triangle in the mesh's space (`CastConvexVsTriangles`).
 
@@ -243,8 +244,8 @@ The default `E = 300 m` is the largest round extent at which every prop of the r
 in CI loses under 0.1 % of its area ([real meshes](real-meshes.md)). The radio, whose bevels are
 strips 1 mm wide, loses 0.021 % at 200 m, 0.024 % at 300 m, 0.17 % at 400 m and 0.69 % at 1100 m.
 The default trades reach for thin triangles: a convex shape whose bounds reach beyond 300 m from its
-centre (a box of half extent above 300 m, or above 299.98 m for a body, whose 0.02 m speculative
-distance counts) can meet a triangle the rule kept for 300 m and trip `EPAPenetrationDepth.h:113`
+centre (a box of half extent above 300 m, or for a body above 300 m less the world's speculative
+contact distance, 299.98 m with the default) can meet a triangle the rule kept for 300 m and trip `EPAPenetrationDepth.h:113`
 in an asserts build, or get a distorted contact in a release one. The sweeps below found no
 assertion up to seven times a mesh's extent and found some at ten times. A mesh that must collide
 with larger shapes is built with a larger `max_convex_extent`, up to `2 · MAX_SHAPE_EXTENT`, and
@@ -396,7 +397,8 @@ What Jolt does with them:
   (`PhysicsSystem.cpp:1671`).
 - The speculative distance widens the broad-phase pairing (`PhysicsSystem.cpp:967`), is the
   narrow phase's maximum separation for pairs without a sensor (`:1101`) and widens manifold
-  building (`:1212`, `:1297`).
+  building (`:1212`, `:1297`). Being that separation, it counts toward the convex extent a mesh is
+  built for ([convex shapes against meshes](#convex-shapes-against-meshes)).
 
 `contact_tuning.rs` measures both. A sphere of radius 0.5 dropped from 3 m and 5 m (centre height)
 peaks above 0.03 m inside the floor; it comes to rest at about 0.02 m with the default slop and
