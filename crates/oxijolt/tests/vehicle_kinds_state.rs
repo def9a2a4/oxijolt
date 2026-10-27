@@ -129,7 +129,8 @@ impl Scene {
     }
 
     /// Gives every vehicle a stronger engine and longer gears, with the gear counts and clutch
-    /// release time of creation.
+    /// release time of creation; the car a longer differential, the tank heavier tracks with
+    /// stronger brakes.
     fn retune(&mut self) {
         let longer = |ratios: &[f32]| ratios.iter().map(|ratio| 1.1 * ratio).collect::<Vec<_>>();
         let mut tank = self.world.vehicle_mut(self.tank).unwrap();
@@ -140,6 +141,13 @@ impl Scene {
                 .gear_ratios(longer(&[4.0, 3.0, 2.0, 1.0])),
         )
         .unwrap();
+        let track = |x: f32| {
+            tank_track(x)
+                .inertia(10.5)
+                .max_brake_torque(18000.0)
+                .differential_ratio(6.5)
+        };
+        tank.set_tracks(track(1.7), track(-1.7)).unwrap();
         let mut bike = self.world.vehicle_mut(self.bike).unwrap();
         bike.set_engine(bike_engine().max_torque(170.0)).unwrap();
         bike.set_transmission(bike_transmission().gear_ratios(longer(&BIKE_GEAR_RATIOS)))
@@ -152,6 +160,9 @@ impl Scene {
                 .gear_ratios(longer(&[2.66, 1.78, 1.3, 1.0, 0.74])),
         )
         .unwrap();
+        let differential =
+            VehicleDifferentialSettings::new(Some(0), Some(1)).differential_ratio(3.8);
+        car.set_differentials(vec![differential], 1.6).unwrap();
     }
 
     /// The inputs of `tick`, then one step.

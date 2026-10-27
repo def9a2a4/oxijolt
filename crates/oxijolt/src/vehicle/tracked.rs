@@ -228,11 +228,11 @@ impl PhysicsWorld {
     ) -> Result<VehicleId<TrackedVehicle>, VehicleError> {
         settings.validate(self.object_layer_count)?;
         self.check_chassis(body)?;
-        let track_mass_ratio = settings.largest_track_mass_ratio(&self.chassis_mass(body));
-        if !limits::is_track_mass_ratio(track_mass_ratio) {
+        let chassis = self.chassis_mass(body);
+        if !limits::is_track_mass_ratio(settings.largest_track_mass_ratio(&chassis)) {
             return Err(VehicleError::InvalidValue(limits::TRACK_MASS_RATIO_RULE));
         }
-        let id = self.attach_vehicle(body, settings.build(), settings.live_drivetrain())?;
+        let id = self.attach_vehicle(body, settings.build(), settings.live_drivetrain(chassis))?;
         Ok(VehicleId::new(id.raw, self.tag))
     }
 

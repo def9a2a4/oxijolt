@@ -13,7 +13,7 @@ use super::{
 use crate::limits::{self, PrincipalMass};
 use crate::math::{is_finite_non_negative, is_finite_positive};
 use crate::owned::{JoltObject, Owned};
-use crate::{PhysicsWorld, Quat, SpringSettings, Vec3, VehicleError};
+use crate::{PhysicsWorld, Quat, SpringSettings, TrackSide, Vec3, VehicleError};
 
 /// One wheel of a tracked vehicle (Jolt `WheelSettings` and `WheelSettingsTV`). The wheel
 /// turns with its track; its suspension and size work as for [`WheelSettings`], whose methods
@@ -599,11 +599,26 @@ impl TrackedVehicleSettings {
                 JPH_TrackedVehicleControllerSettings_SetTransmission(ptr, transmission.as_ptr());
             }
         });
-        for (side, (track, wheels)) in self
-            .tracks()
+        self.for_each_jph_track(|side, jolt_track| {
+            // SAFETY: the guard owns the controller settings; `jolt_track` and its wheel list are
+            // live for the call, which copies them. `side as u32` is 0 (left) or 1 (right), the
+            // two tracks joltc stores.
+            unsafe { JPH_TrackedVehicleControllerSettings_SetTrack(ptr, side as u32, jolt_track) };
+        });
+        controller
+    }
+
+    /// Hands the joltc settings of each validated track, with its side, to `apply`. The driven
+    /// wheel and the wheel list are vehicle wheel indices; the list lives for the call.
+    pub(super) fn for_each_jph_track(
+        &self,
+        mut apply: impl FnMut(TrackSide, &JPH_VehicleTrackSettings),
+    ) {
+        let sides = [TrackSide::Left, TrackSide::Right];
+        for ((side, track), wheels) in sides
             .into_iter()
+            .zip(self.tracks())
             .zip(self.track_wheels())
-            .enumerate()
         {
             let indices: Vec<u32> = wheels.clone().collect();
             let jolt_track = JPH_VehicleTrackSettings {
@@ -616,12 +631,8 @@ impl TrackedVehicleSettings {
                 maxBrakeTorque: track.max_brake_torque,
                 differentialRatio: track.differential_ratio,
             };
-            // SAFETY: the guard owns the controller settings; `jolt_track` and `indices` are live
-            // for the call, which copies them. `side` is 0 (left) or 1 (right), the two tracks
-            // joltc stores.
-            unsafe { JPH_TrackedVehicleControllerSettings_SetTrack(ptr, side as u32, &jolt_track) };
+            apply(side, &jolt_track);
         }
-        controller
     }
 }
 

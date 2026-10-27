@@ -1,11 +1,13 @@
-//! Live drivetrains: the engine and transmission of a car, a motorcycle and a tank read back
-//! as set, change the drive from the next step on, keep the gear counts and the clutch release
-//! time of creation, survive a restore, and refuse invalid values without changing anything.
+//! Live drivetrains: the engine, transmission and differentials of a car, a motorcycle and a
+//! tank read back as set, change the drive from the next step on, keep the gear counts and the
+//! clutch release time of creation, survive a restore, and refuse invalid values without
+//! changing anything. The tank's tracks are in `tracked_tuning.rs`.
 
 mod common;
 
 use common::vehicle::{
-    car_wheels, car_world, chassis_settings, chassis_shape, record_vehicle, CarLayers, GRAVITY,
+    add_car, car_wheels, car_world, chassis_settings, chassis_shape, record_vehicle, CarLayers,
+    GRAVITY, SUSPENSION_MIN, WHEEL_RADIUS, WHEEL_WIDTH,
 };
 use common::vehicle_kinds::*;
 use common::*;
@@ -600,4 +602,203 @@ fn drivetrain_setters_use_the_current_collision_tester() {
     assert_eq!(scene.vehicle().collision_tester(), rebased);
     step(&mut scene.world, 30);
     scene.assert_finite();
+}
+
+/// The angular velocities of the vehicle's wheels, rad/s, in wheel order.
+fn wheel_spins<K: VehicleKind>(vehicle: &VehicleRef<'_, K>) -> Vec<f32> {
+    vehicle
+        .wheels()
+        .iter()
+        .map(|wheel| wheel.angular_velocity)
+        .collect()
+}
+
+#[test]
+fn moving_drive_to_the_rear_differential_changes_which_wheels_spin() {
+    // The test car, front-wheel drive, floating without gravity or ground at full throttle.
+    let (mut world, layers) = car_world(Vec3::ZERO, 1);
+    let (_, car) = add_car(&mut world, &layers, RVec3::ZERO, Quat::IDENTITY);
+    let full = DriverInput {
+        forward: 1.0,
+        ..DriverInput::default()
+    };
+    let drive = |world: &mut PhysicsWorld, ticks: usize| {
+        for _ in 0..ticks {
+            world
+                .vehicle_mut(car)
+                .unwrap()
+                .set_driver_input(full)
+                .unwrap();
+            step(world, 1);
+        }
+    };
+    drive(&mut world, 90);
+    let front_driven = wheel_spins(&world.vehicle(car).unwrap());
+    eprintln!("front-wheel drive: {front_driven:?} rad/s");
+    assert!(front_driven[0] > 1.0 && front_driven[1] > 1.0);
+    assert_eq!(&front_driven[2..], [0.0, 0.0]);
+
+    let rear = vec![VehicleDifferentialSettings::new(Some(2), Some(3))];
+    world
+        .vehicle_mut(car)
+        .unwrap()
+        .set_differentials(rear.clone(), 2.0)
+        .unwrap();
+    let vehicle = world.vehicle(car).unwrap();
+    assert_eq!(vehicle.differentials(), rear);
+    assert_eq!(vehicle.differential_limited_slip_ratio(), 2.0);
+    drive(&mut world, 90);
+    let rear_driven = wheel_spins(&world.vehicle(car).unwrap());
+    eprintln!("rear-wheel drive: {rear_driven:?} rad/s");
+    assert!(rear_driven.iter().all(|spin| spin.is_finite()));
+    assert!(rear_driven[2] > 1.0 && rear_driven[3] > 1.0);
+    assert!(rear_driven[0] <= front_driven[0] && rear_driven[1] <= front_driven[1]);
+}
+
+/// A car on flat ground whose engine drives, through two differentials of half the torque
+/// each, its rear pair and a pair mounted too high to reach the ground; the front pair rolls.
+/// The differentials share the torque openly (limited slip ratio `f32::MAX`).
+fn lifted_pair_car() -> Scene<WheeledVehicle> {
+    let (mut world, layers) = car_world(GRAVITY, 1);
+    let ground = add_ground(&mut world, &layers);
+    let body = chassis_settings(&layers, RVec3::new(0.0, 1.0, 0.0), Quat::IDENTITY);
+    let chassis = world.create_body(&chassis_shape(), &body).unwrap();
+    let lifted = |x: f32| {
+        WheelSettings::new(Vec3::new(x, 0.3, 0.0))
+            .radius(WHEEL_RADIUS)
+            .width(WHEEL_WIDTH)
+            .suspension_min_length(SUSPENSION_MIN)
+            .suspension_max_length(0.1)
+    };
+    let mut wheels = car_wheels();
+    wheels.extend([lifted(0.9), lifted(-0.9)]);
+    let half = |left, right| {
+        VehicleDifferentialSettings::new(Some(left), Some(right)).engine_torque_ratio(0.5)
+    };
+    let settings = WheeledVehicleSettings::new(
+        wheels,
+        vec![half(4, 5), half(2, 3)],
+        VehicleCollisionTester::ray(layers.probe),
+    )
+    .transmission(car_transmission())
+    .differential_limited_slip_ratio(f32::MAX);
+    let id = world.create_wheeled_vehicle(chassis, &settings).unwrap();
+    world.vehicle_mut(id).unwrap().set_gravity(GRAVITY).unwrap();
+    Scene {
+        world,
+        ground,
+        chassis,
+        id,
+    }
+}
+
+#[test]
+fn limited_slip_ratio_changes_torque_split() {
+    let run = |limited_slip_ratio: Option<f32>| {
+        let mut scene = lifted_pair_car();
+        let mut before = Vec::new();
+        for _ in 0..10 {
+            scene.tick();
+            before.push(scene.bits());
+        }
+        let wheels = scene.vehicle().wheels();
+        assert!(wheels[4].contact.is_none() && wheels[2].contact.is_some());
+        if let Some(ratio) = limited_slip_ratio {
+            let differentials = scene.vehicle().differentials().to_vec();
+            scene
+                .vehicle_mut()
+                .set_differentials(differentials, ratio)
+                .unwrap();
+        }
+        scene.ticks(50);
+        scene.assert_finite();
+        let spins = wheel_spins(&scene.vehicle());
+        (before, spins[4], spins[2], scene.forward_speed())
+    };
+    let (open_before, open_lifted, open_rear, open_speed) = run(None);
+    let (tight_before, tight_lifted, tight_rear, tight_speed) = run(Some(1.05));
+    assert!(
+        open_before == tight_before,
+        "the twins differ before the change"
+    );
+    eprintln!(
+        "open: lifted {open_lifted}, rear {open_rear} rad/s, {open_speed} m/s; \
+         limited 1.05: lifted {tight_lifted}, rear {tight_rear} rad/s, {tight_speed} m/s"
+    );
+    assert!(tight_lifted < open_lifted);
+    assert!(tight_speed > open_speed);
+}
+
+#[test]
+fn a_motorcycle_differential_change_changes_its_drive() {
+    const BIKE_DIFFERENTIAL_RATIO: f32 = 1.93 * 40.0 / 16.0;
+    let scene = Motorcycle::scene();
+    let created =
+        [VehicleDifferentialSettings::new(None, Some(1))
+            .differential_ratio(BIKE_DIFFERENTIAL_RATIO)];
+    assert_eq!(scene.vehicle().differentials(), created);
+    assert_eq!(scene.vehicle().differential_limited_slip_ratio(), 1.4);
+
+    // The rear wheel slips at this throttle. Four times the ratio turns it at the engine's
+    // pace without slipping, and the bike falls behind.
+    let shorter = vec![created[0].differential_ratio(4.0 * BIKE_DIFFERENTIAL_RATIO)];
+    let [(before, speed), (changed_before, changed_speed)] = twins::<Motorcycle>(|bike| {
+        bike.set_differentials(shorter.clone(), 1.4).unwrap();
+    });
+    assert!(
+        before == changed_before,
+        "the twins differ before the change"
+    );
+    eprintln!("motorcycle at tick 60: {speed} m/s, shorter differential {changed_speed} m/s");
+    assert!(changed_speed < speed - 0.5);
+}
+
+#[test]
+fn invalid_live_differentials_change_nothing() {
+    let half = |left, right| {
+        VehicleDifferentialSettings::new(Some(left), Some(right)).engine_torque_ratio(0.5)
+    };
+    let cases = [
+        (
+            "differential wheel index out of range",
+            vec![half(0, 1), half(2, 4)],
+            1.4,
+        ),
+        (
+            "differential engine torque ratios must add up to 1",
+            vec![half(0, 1), half(2, 3).engine_torque_ratio(0.6)],
+            1.4,
+        ),
+        (
+            "differential limited slip ratio must be finite and above 1",
+            vec![half(0, 1), half(2, 3)],
+            1.0,
+        ),
+        ("a vehicle needs at least one differential", vec![], 1.4),
+        // 1e38 times the largest gear ratio times the clutch strength overflows `f32`.
+        (
+            "clutch strength, ratios and wheel inertia give a non-finite step coefficient",
+            vec![half(0, 1), half(2, 3).differential_ratio(1.0e38)],
+            1.4,
+        ),
+    ];
+    for (rule, differentials, limited_slip_ratio) in cases {
+        refused_change_changes_nothing::<WheeledVehicle>(rule, |car| {
+            car.set_differentials(differentials.clone(), limited_slip_ratio)
+        });
+        let mut scene = WheeledVehicle::scene();
+        let created = scene.vehicle().differentials().to_vec();
+        let created_ratio = scene.vehicle().differential_limited_slip_ratio();
+        assert_invalid(
+            scene
+                .vehicle_mut()
+                .set_differentials(differentials, limited_slip_ratio),
+            rule,
+        );
+        assert_eq!(scene.vehicle().differentials(), created);
+        assert_eq!(
+            scene.vehicle().differential_limited_slip_ratio(),
+            created_ratio
+        );
+    }
 }

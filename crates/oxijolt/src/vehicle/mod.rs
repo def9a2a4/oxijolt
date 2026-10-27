@@ -37,7 +37,8 @@ use crate::{AllowedDofs, BodyError, BodyId, MotionType, PhysicsWorld, Vec3, Vehi
 
 pub use control::{DriverInput, VehicleMut};
 pub use id::{
-    AnyVehicleId, Motorcycle, TrackedVehicle, VehicleId, VehicleKind, VehicleType, WheeledVehicle,
+    AnyVehicleId, Motorcycle, TrackedVehicle, VehicleId, VehicleKind, VehicleType,
+    WheeledControllerKind, WheeledVehicle,
 };
 pub use motorcycle::MotorcycleLean;
 pub use readout::{VehicleRef, WheelContact, WheelState};

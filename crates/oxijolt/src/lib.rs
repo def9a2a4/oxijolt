@@ -246,7 +246,7 @@ pub use vehicle::{
     VehicleAntiRollBar, VehicleCollisionTester, VehicleDifferentialSettings, VehicleEngineSettings,
     VehicleId, VehicleKind, VehicleMut, VehicleRef, VehicleTrackSettings,
     VehicleTransmissionSettings, VehicleType, WheelContact, WheelSettings, WheelState,
-    WheeledVehicle, WheeledVehicleSettings,
+    WheeledControllerKind, WheeledVehicle, WheeledVehicleSettings,
 };
 pub use world::{PhysicsWorld, StepReport, WorldSettings};
 

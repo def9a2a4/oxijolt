@@ -3,23 +3,26 @@
 
 use oxijolt_sys::*;
 
-use super::tracked::TrackSpeedBound;
+use super::tracked::{ChassisMass, TrackSpeedBound};
 use super::{
-    MotorcycleSettings, TrackedVehicleSettings, VehicleCollisionTester, VehicleEngineSettings,
+    MotorcycleSettings, TrackedVehicleSettings, VehicleCollisionTester,
+    VehicleDifferentialSettings, VehicleEngineSettings, VehicleTrackSettings,
     VehicleTransmissionSettings, WheeledVehicleSettings,
 };
-use crate::VehicleError;
+use crate::{limits, TrackSide, VehicleError};
 
 /// The drivetrain configuration of a live vehicle as last applied, which Jolt does not save.
 #[derive(Clone)]
 pub(crate) enum LiveDrivetrain {
     /// A wheeled vehicle's settings, or a motorcycle's wheeled part.
     Wheeled(WheeledVehicleSettings),
-    /// A tracked vehicle's settings and how fast any configuration it had can have left its
-    /// tracks turning (running maximum, see docs/limits.md#track-drive-envelope).
+    /// A tracked vehicle's settings, how fast any configuration it had can have left its
+    /// tracks turning (running maximum, see docs/limits.md#track-drive-envelope), and its
+    /// chassis, which cannot change while the vehicle exists (`check_not_owned`).
     Tracked {
         settings: TrackedVehicleSettings,
         track_speed_bound: TrackSpeedBound,
+        chassis: ChassisMass,
     },
 }
 
@@ -88,6 +91,7 @@ impl LiveDrivetrain {
             Self::Tracked {
                 settings,
                 track_speed_bound,
+                ..
             } => {
                 settings.collision_tester = tester;
                 settings.validate_from(object_layer_count, track_speed_bound)?;
@@ -149,6 +153,143 @@ impl LiveDrivetrain {
     }
 }
 
+impl LiveDrivetrain {
+    /// The settings of a wheeled vehicle or a motorcycle.
+    fn wheeled(&self) -> &WheeledVehicleSettings {
+        match self {
+            Self::Wheeled(settings) => settings,
+            Self::Tracked { .. } => unreachable!("a wheeled controller has a wheeled drivetrain"),
+        }
+    }
+
+    /// The tracked vehicle's settings.
+    fn tracked(&self) -> &TrackedVehicleSettings {
+        match self {
+            Self::Tracked { settings, .. } => settings,
+            Self::Wheeled(_) => unreachable!("a tracked controller has a tracked drivetrain"),
+        }
+    }
+
+    /// The differentials last applied.
+    pub(crate) fn differentials(&self) -> &[VehicleDifferentialSettings] {
+        &self.wheeled().differentials
+    }
+
+    /// The limited slip ratio between the differentials last applied.
+    pub(crate) fn differential_limited_slip_ratio(&self) -> f32 {
+        self.wheeled().differential_limited_slip_ratio
+    }
+
+    /// This wheeled drivetrain with `differentials` and `limited_slip_ratio`, validated as at
+    /// creation with the vehicle's current collision `tester`.
+    pub(crate) fn with_differentials(
+        &self,
+        differentials: Vec<VehicleDifferentialSettings>,
+        limited_slip_ratio: f32,
+        tester: VehicleCollisionTester,
+        object_layer_count: u32,
+    ) -> Result<Self, VehicleError> {
+        let mut settings = self.wheeled().clone();
+        settings.differentials = differentials;
+        settings.differential_limited_slip_ratio = limited_slip_ratio;
+        Self::Wheeled(settings).validated(tester, object_layer_count)
+    }
+
+    /// The track on `side` last applied.
+    pub(crate) fn track(&self, side: TrackSide) -> &VehicleTrackSettings {
+        let settings = self.tracked();
+        match side {
+            TrackSide::Left => &settings.left,
+            TrackSide::Right => &settings.right,
+        }
+    }
+
+    /// This tracked drivetrain with the tracks `left` and `right`, validated as at creation
+    /// with the vehicle's current collision `tester`, its chassis and the track speeds earlier
+    /// configurations allowed. Each track's wheels and driven wheel must stay as they are.
+    pub(crate) fn with_tracks(
+        &self,
+        left: VehicleTrackSettings,
+        right: VehicleTrackSettings,
+        tester: VehicleCollisionTester,
+        object_layer_count: u32,
+    ) -> Result<Self, VehicleError> {
+        let current = [self.track(TrackSide::Left), self.track(TrackSide::Right)];
+        for (current, new) in current.into_iter().zip([&left, &right]) {
+            if new.wheels != current.wheels || new.driven_wheel != current.driven_wheel {
+                return Err(VehicleError::FixedAtCreation("track wheels"));
+            }
+        }
+        let mut candidate = self.clone();
+        if let Self::Tracked { settings, .. } = &mut candidate {
+            settings.left = left;
+            settings.right = right;
+        }
+        let candidate = candidate.validated(tester, object_layer_count)?;
+        if let Self::Tracked {
+            settings, chassis, ..
+        } = &candidate
+        {
+            if !limits::is_track_mass_ratio(settings.largest_track_mass_ratio(chassis)) {
+                return Err(VehicleError::InvalidValue(limits::TRACK_MASS_RATIO_RULE));
+            }
+        }
+        Ok(candidate)
+    }
+
+    /// Copies this wheeled drivetrain's differentials and their limited slip ratio into the
+    /// vehicle's controller.
+    ///
+    /// # Safety
+    /// As for [`apply_engine`](Self::apply_engine), for a [`Wheeled`](Self::Wheeled) drivetrain.
+    pub(crate) unsafe fn apply_differentials(&self, controller: *mut JPH_VehicleController) {
+        let differentials: Vec<JPH_VehicleDifferentialSettings> = self
+            .differentials()
+            .iter()
+            .map(|differential| differential.to_jph())
+            .collect();
+        let controller: *mut JPH_WheeledVehicleController = controller.cast();
+        // SAFETY: the controller is a live `WheeledVehicleController` that nothing else uses
+        // (contract; a `MotorcycleController` derives from it with single inheritance).
+        // `differentials` holds as many validated entries as passed and lives for the call,
+        // which copies them.
+        unsafe {
+            JPH_WheeledVehicleController_SetDifferentials(
+                controller,
+                differentials.as_ptr(),
+                differentials.len() as u32,
+            );
+            JPH_WheeledVehicleController_SetDifferentialLimitedSlipRatio(
+                controller,
+                self.differential_limited_slip_ratio(),
+            );
+        }
+    }
+
+    /// Copies this tracked drivetrain's tracks into the vehicle's controller.
+    ///
+    /// # Safety
+    /// As for [`apply_engine`](Self::apply_engine), for a [`Tracked`](Self::Tracked)
+    /// drivetrain; the controller's track wheels and driven wheels are this drivetrain's
+    /// ([`with_tracks`](Self::with_tracks) checked them against the tracks last applied).
+    pub(crate) unsafe fn apply_tracks(&self, controller: *mut JPH_VehicleController) {
+        self.tracked().for_each_jph_track(|side, track| {
+            let jolt_side = match side {
+                TrackSide::Left => JPH_TrackSide_Left,
+                TrackSide::Right => JPH_TrackSide_Right,
+            };
+            // SAFETY: the controller is a live `TrackedVehicleController` that nothing else
+            // uses (contract); `track` and its wheel list live for the call, which copies them.
+            let copied = unsafe {
+                JPH_TrackedVehicleController_SetTrack(controller.cast(), jolt_side, track)
+            };
+            if !copied {
+                unreachable!("the track wheels were checked");
+            }
+        });
+    }
+}
+
 /// Refuses a transmission whose gear counts or clutch release time differ from `current`'s:
 /// Jolt's saved state holds the current gear, which indexes the ratios, and the clutch release
 /// countdown, which it divides by the release time.
@@ -183,12 +324,13 @@ impl MotorcycleSettings {
 }
 
 impl TrackedVehicleSettings {
-    /// The drivetrain a tracked vehicle created from these validated settings starts with, its
-    /// tracks at rest.
-    pub(crate) fn live_drivetrain(&self) -> LiveDrivetrain {
+    /// The drivetrain a tracked vehicle created from these validated settings on `chassis`
+    /// starts with, its tracks at rest.
+    pub(crate) fn live_drivetrain(&self, chassis: ChassisMass) -> LiveDrivetrain {
         LiveDrivetrain::Tracked {
             settings: self.clone(),
             track_speed_bound: self.track_speed_bound(&TrackSpeedBound::AT_REST),
+            chassis,
         }
     }
 }
@@ -196,7 +338,8 @@ impl TrackedVehicleSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ObjectLayer, TrackedWheelSettings, Vec3, VehicleTrackSettings};
+    use crate::limits::PrincipalMass;
+    use crate::{ObjectLayer, Quat, TrackedWheelSettings, Vec3};
 
     const LAYERS: u32 = 2;
 
@@ -209,6 +352,21 @@ mod tests {
             VehicleTrackSettings::new(wheels, 0)
         };
         TrackedVehicleSettings::new(track(1.0), track(-1.0), tester())
+    }
+
+    /// A 4000 kg chassis with the inertia of a 3.4 x 1 x 6.4 m box.
+    fn chassis() -> ChassisMass {
+        let mass = 4000.0;
+        let inertia = |a: f64, b: f64| mass / 12.0 * (a * a + b * b);
+        ChassisMass {
+            mass: PrincipalMass {
+                inverse_mass: 1.0 / mass,
+                inverse_inertia: [inertia(1.0, 6.4), inertia(3.4, 6.4), inertia(3.4, 1.0)]
+                    .map(|moment| 1.0 / moment),
+            },
+            body_to_principal: Quat::IDENTITY,
+            center_of_mass: Vec3::ZERO,
+        }
     }
 
     fn tester() -> VehicleCollisionTester {
@@ -227,7 +385,7 @@ mod tests {
     #[test]
     fn live_changes_keep_the_running_track_speed_bound() {
         let engine = TrackedVehicleSettings::default_engine();
-        let created = tank().live_drivetrain();
+        let created = tank().live_drivetrain(chassis());
         let stronger = created
             .with_engine(engine.clone().max_torque(5000.0), tester(), LAYERS)
             .unwrap();
