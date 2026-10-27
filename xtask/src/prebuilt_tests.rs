@@ -5,31 +5,33 @@ use std::fs;
 use std::path::Path;
 
 use crate::prebuilt::*;
-use crate::prebuilt_archive::{sha256, sources_fingerprint};
+use crate::prebuilt_archive::{rustc_deployment_target, sha256, sources_fingerprint};
 use crate::test_support::{config, fake_crate, write_file, TempDir};
 
 const WINDOWS: &str = "x86_64-pc-windows-msvc";
 const LINUX: &str = "x86_64-unknown-linux-gnu";
+const MACOS: &str = "aarch64-apple-darwin";
 
 fn v(major: u32, minor: u32) -> Version2 {
     Version2 { major, minor }
 }
 
 fn archive(name: &str, config: ArchiveConfig) -> Archive {
-    let msvc = config.target.ends_with("-msvc");
+    let target = config.target.as_str();
     Archive {
         name: name.to_owned(),
         sha256: sha256(name.as_bytes()),
-        msvc: msvc.then_some(v(14, 44)),
-        glibc: (!msvc).then_some(v(2, 35)),
+        msvc: target.ends_with("-msvc").then_some(v(14, 44)),
+        glibc: target.ends_with("-linux-gnu").then_some(v(2, 35)),
+        macos: target.ends_with("-apple-darwin").then_some(v(11, 0)),
         config,
     }
 }
 
-/// The 16 archives of a release, listed out of name order.
+/// The 24 archives of a release, listed out of name order.
 fn release_list() -> ArchiveList {
     let mut archives = Vec::new();
-    for target in [LINUX, WINDOWS] {
+    for target in [LINUX, MACOS, WINDOWS] {
         for subset in (0..8).rev() {
             archives.push(archive(
                 &format!("oxijolt-sys-1.2.0-{target}-{subset}"),
@@ -64,8 +66,8 @@ fn a_release_list_round_trips_sorted_with_lf() {
     assert_eq!(write(&parsed), text);
 }
 
-/// The committed list holds no archives before the first release and a release's 16 after its
-/// release branch is merged; either way it is what the list writer writes.
+/// The committed list holds no archives before the first release and a release's archives
+/// after its release branch is merged; either way it is what the list writer writes.
 #[test]
 fn the_committed_list_is_written_by_the_list_writer() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/oxijolt-sys/prebuilt.txt");
@@ -88,7 +90,7 @@ fn a_placeholder_lists_no_archives() {
 #[test]
 fn select_finds_every_release_configuration() {
     let list = release_list();
-    for target in [WINDOWS, LINUX] {
+    for target in [LINUX, MACOS, WINDOWS] {
         for subset in 0..8 {
             let found = select(&list, "1.2.0+jolt-5.6.0", &config(target, subset)).expect("listed");
             assert_eq!(found.name, format!("oxijolt-sys-1.2.0-{target}-{subset}"));
@@ -171,6 +173,23 @@ fn malformed_lists_are_refused() {
     for (case, text) in cases {
         assert!(parse(&text).is_err(), "{case} was accepted:\n{text}");
     }
+
+    let apple = LINE
+        .replace(
+            "x86_64-pc-windows-msvc crt=MultiThreadedDLL",
+            "aarch64-apple-darwin crt=none",
+        )
+        .replace(" msvc=14.44", "");
+    let apple_cases = [
+        ("apple without macos", apple.clone(), "needs `macos`"),
+        ("bad macos", format!("{apple} macos=x"), "bad `macos`"),
+    ];
+    for (case, line, expected) in apple_cases {
+        let error = parse(&format!("{HEADER}{line}\n")).expect_err(case);
+        assert!(error.contains(expected), "{case}: {error}");
+    }
+    let good = parse(&format!("{HEADER}{apple} macos=11.0\n")).expect("parses");
+    assert_eq!(good.archives[0].macos, Some(v(11, 0)));
 }
 
 #[test]
@@ -464,6 +483,63 @@ fn the_linker_must_be_as_new_as_the_archive() {
         check_linker(&linux, &gnu(true, false, Some(v(2, 39)))),
         Err(Unavailable::CrossBuild)
     );
+
+    let macos = archive("m", config(MACOS, 0));
+    let apple = |deployment_target| Linker::Apple { deployment_target };
+    assert_eq!(check_linker(&macos, &apple(Some(v(11, 0)))), Ok(()));
+    assert_eq!(check_linker(&macos, &apple(Some(v(14, 0)))), Ok(()));
+    assert_eq!(
+        check_linker(&macos, &apple(Some(v(10, 15)))),
+        Err(Unavailable::MacosTooOld {
+            have: v(10, 15),
+            need: v(11, 0)
+        })
+    );
+    assert_eq!(
+        check_linker(&macos, &apple(None)),
+        Err(Unavailable::MacosUnknown)
+    );
+    let unrecorded = Archive {
+        macos: None,
+        ..macos.clone()
+    };
+    assert_eq!(
+        check_linker(&unrecorded, &apple(Some(v(11, 0)))),
+        Err(Unavailable::MacosUnknown)
+    );
+}
+
+#[test]
+fn deployment_targets_are_read_from_rustc_output() {
+    for (output, expected) in [
+        ("MACOSX_DEPLOYMENT_TARGET=11.0\n", v(11, 0)),
+        ("deployment_target=14.2\r\n", v(14, 2)),
+        ("  MACOSX_DEPLOYMENT_TARGET=11.0.1  ", v(11, 0)),
+    ] {
+        assert_eq!(
+            deployment_target_from_rustc(output),
+            Some(expected),
+            "{output:?}"
+        );
+    }
+    for output in [
+        "",
+        "11.0",
+        "OTHER=11.0",
+        "MACOSX_DEPLOYMENT_TARGET=junk",
+        "MACOSX_DEPLOYMENT_TARGET=11.0\nMACOSX_DEPLOYMENT_TARGET=12.0\n",
+    ] {
+        assert_eq!(deployment_target_from_rustc(output), None, "{output:?}");
+    }
+}
+
+/// The target specs are built into rustc, so any host can ask for an Apple target.
+#[test]
+fn rustc_reports_the_deployment_target() {
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let apple = rustc_deployment_target(&rustc, MACOS).expect("an Apple target has one");
+    assert!(apple >= v(11, 0), "{apple}");
+    assert_eq!(rustc_deployment_target(&rustc, WINDOWS), None);
 }
 
 #[test]
@@ -497,6 +573,11 @@ fn every_reason_reads_as_a_short_sentence() {
             have: v(2, 31),
             need: v(2, 35),
         },
+        Unavailable::MacosUnknown,
+        Unavailable::MacosTooOld {
+            have: v(10, 15),
+            need: v(11, 0),
+        },
         Unavailable::Checksum,
     ];
     let words = [
@@ -511,6 +592,8 @@ fn every_reason_reads_as_a_short_sentence() {
         "crt-static",
         "linker",
         "older",
+        "older",
+        "macOS",
         "older",
         "checksum",
     ];

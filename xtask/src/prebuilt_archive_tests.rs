@@ -26,6 +26,7 @@ fn good() -> (Vec<u8>, Archive) {
         config,
         msvc: None,
         glibc: None,
+        macos: None,
     };
     (bytes, archive)
 }

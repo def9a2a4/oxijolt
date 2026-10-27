@@ -198,6 +198,7 @@ pub fn read_archive(path: &Path, commit: &str) -> anyhow::Result<Archive> {
         config,
         msvc,
         glibc,
+        macos: None,
     })
 }
 
