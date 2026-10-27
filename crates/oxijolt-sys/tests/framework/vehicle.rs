@@ -4,8 +4,6 @@
 use std::f32::consts::PI;
 use std::ptr::null;
 
-use oxijolt_sys::*;
-
 use super::*;
 
 /// One wheel at the chassis' bottom centre, Jolt's other wheel defaults.
