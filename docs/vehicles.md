@@ -224,7 +224,8 @@ clamped to `0..=limits::MAX_FRICTION`, NaN counts as 0, and the cap stays Jolt's
 coefficient times suspension impulse.
 
 So a callback gives a wheel no more grip than a friction curve of `MAX_FRICTION` on ground of
-`MAX_FRICTION` gives it, and has the same stability: that much grip on wheels heavy against their
+`MAX_FRICTION` gives it. The grip bound is the same, not the stability: a callback can couple the
+coefficients to the slips, which no curve does. That much grip on wheels heavy against their
 chassis can throw the chassis to Jolt's velocity clamps with or without a callback
 ([limits](limits.md#tire-friction)).
 

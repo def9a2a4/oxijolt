@@ -1218,7 +1218,7 @@ friction `MAX_FRICTION` the callback and the curves gave bit-identical runs
 - a 1 × 0.6 × 1 m box on wheels of 8.4 kg·m² at (±0.5, −0.3, ±0.75) with suspension force points
   at a height of 1.15 m, above the centre of mass: the 15π rad/s clamp at tick 130 and 36;
 - a 0.6 × 4 × 0.6 m box with wheels of 3.84 kg·m² 3 m ahead and behind, front wheels steering 70°:
-  at most 12.5 m/s and 9.3 rad/s.
+  at most 12.5 m/s and 9.2 rad/s.
 
 With Jolt's default curves on ground of friction 0.2 none of the three reached a clamp; the
 second came closest, 40.6 rad/s at 0.1 s.
