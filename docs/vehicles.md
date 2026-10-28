@@ -173,6 +173,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   `limits::MAX_ANGULAR_ACCELERATION`, which `create_motorcycle` checks against the chassis'
   inertia ([limits](limits.md#motorcycle-lean)): Jolt's defaults fit a chassis whose largest
   principal inverse inertia is below about 430 1/(kg·m²).
+  The defaults (5000 and 1000) are absolute, not scaled by mass: a bicycle-sized motorcycle (90 kg,
+  0.34 m wheels) passes that check yet falls over on them. Scale the spring and the damping with
+  the chassis mass (`lean_spring_constant`, `lean_spring_damping`).
 - **No integral term.** `lean_spring_integration_coefficient` must be 0, Jolt's default.
   Jolt's `SaveState` does not save the integrated lean angle, so with another value a restored
   state can replay differently (it did with 200 in a probe); `create_motorcycle` refuses it with
@@ -228,6 +231,11 @@ So a callback gives a wheel no more grip than a friction curve of `MAX_FRICTION`
 coefficients to the slips, which no curve does. That much grip on wheels heavy against their
 chassis can throw the chassis to Jolt's velocity clamps with or without a callback
 ([limits](limits.md#tire-friction)).
+
+Jolt's default longitudinal curve starts at `(0, 0)`: no grip at zero slip. The grip a driven
+wheel gets in a step comes from its slip at the start of the step, so at launch it spins for one
+step and grips on the next. A curve with grip at zero slip (`WheelSettings::longitudinal_friction`)
+smooths this out, with or without a callback.
 
 - **Threads.** The solver calls the closure for each wheel with ground contact in every velocity
   iteration it runs, on its worker threads, concurrently with other vehicles' callbacks but never
