@@ -126,6 +126,9 @@ Everything planned for 1.0 is done; what works today, with links to the guides, 
   filter, listener, debug renderer and assertion procs; code that also uses `oxijolt-sys` directly
   must leave them alone.
 
+Native inertia queries report the dynamic body's world-space rotational response
+and unmasked angular impulse bound; see [the guide](docs/guide.md#native-inertia-queries).
+
 ## Compared with rolt
 
 [rolt](https://crates.io/crates/rolt) and joltc-sys, from Second Half Games, are the Rust

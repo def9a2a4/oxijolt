@@ -11,6 +11,97 @@ const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
 const Z: Vec3 = Vec3::new(0.0, 0.0, 1.0);
 
 #[test]
+fn world_inverse_inertia_matches_rotated_offset_body_native_impulses() {
+    let mut world = world(Vec3::ZERO, 1);
+    let shape = Shape::new_box(Vec3::new(1.0, 0.8, 0.6)).unwrap();
+    let shape = Shape::new_offset_center_of_mass(&shape, Vec3::new(0.0, 0.0, -0.5)).unwrap();
+    let id = world
+        .create_body(
+            &shape,
+            &BodySettings::new_dynamic()
+                .mass(1000.0)
+                .rotation(Quat::from_xyzw(0.0, 0.0, 0.3_f32.sin(), 0.3_f32.cos())),
+        )
+        .unwrap();
+    let columns = world.body(id).unwrap().world_inverse_inertia().unwrap();
+    // Cross-axis entries must be nonzero after rotating an anisotropic tensor.
+    assert!(columns[0].y.abs() > 1e-6);
+    for (i, impulse) in [
+        Vec3::new(10.0, 0.0, 0.0),
+        Vec3::new(0.0, 10.0, 0.0),
+        Vec3::new(0.0, 0.0, 10.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut body = world.body_mut(id).unwrap();
+        body.set_angular_velocity(Vec3::ZERO).unwrap();
+        body.add_angular_impulse(impulse).unwrap();
+        let actual = body.angular_velocity();
+        let c = columns[i];
+        for (actual, expected) in [
+            (actual.x, c.x * 10.0),
+            (actual.y, c.y * 10.0),
+            (actual.z, c.z * 10.0),
+        ] {
+            assert!((actual - expected).abs() <= expected.abs() * 1e-5 + 1e-7);
+        }
+    }
+}
+
+#[test]
+fn world_inverse_inertia_returns_none_for_static_and_kinematic_bodies() {
+    let mut world = world(Vec3::ZERO, 1);
+    let shape = cube_shape();
+    for settings in [BodySettings::new_static(), BodySettings::new_kinematic()] {
+        let id = world.create_body(&shape, &settings).unwrap();
+        assert!(world.body(id).unwrap().world_inverse_inertia().is_none());
+        assert!(world
+            .body(id)
+            .unwrap()
+            .angular_impulse_inverse_inertia_bound()
+            .is_none());
+    }
+}
+
+#[test]
+fn angular_impulse_bound_preserves_unmasked_native_guard_with_partial_rotation_lock() {
+    let mut world = world(Vec3::ZERO, 1);
+    let shape = Shape::new_box(Vec3::new(1.0, 0.1, 0.1)).unwrap();
+    let id = world
+        .create_body(
+            &shape,
+            &BodySettings::new_dynamic()
+                .mass(1000.0)
+                .allowed_dofs(AllowedDofs::TRANSLATION_X | AllowedDofs::ROTATION_Y),
+        )
+        .unwrap();
+    let body = world.body(id).unwrap();
+    let columns = body.world_inverse_inertia().unwrap();
+    let bound = body.angular_impulse_inverse_inertia_bound().unwrap();
+    assert!(
+        bound > columns[1].y * 20.0,
+        "partial locking must hide the small-inertia X axis from the world tensor"
+    );
+    let limit = limits::MAX_ANGULAR_VELOCITY_CHANGE;
+    let oversized = 2.0 * limit / bound;
+    let mut body = world.body_mut(id).unwrap();
+    // Rotation Y would be below speed limits, but wrapper validation uses the
+    // unmasked largest principal moment, not the allowed-axis world tensor.
+    assert!(body
+        .add_angular_impulse(Vec3::new(0.0, oversized, 0.0))
+        .is_err());
+    assert_eq!(body.angular_velocity(), Vec3::ZERO);
+    let admitted = limit / bound * (1.0 - 64.0 * f32::EPSILON);
+    body.add_angular_impulse(Vec3::new(0.0, admitted, 0.0))
+        .unwrap();
+    let actual = body.angular_velocity();
+    assert!(actual.y > 0.0 && actual.y < limits::MAX_ANGULAR_VELOCITY);
+    assert_eq!(actual.x, 0.0);
+    assert_eq!(actual.z, 0.0);
+}
+
+#[test]
 fn impulses_change_velocity_at_once_and_wake() {
     let mut world = world(Vec3::ZERO, 1);
     // 2 kg: Jolt's inverse mass 0.5 is exact, so the velocity change is exact too.

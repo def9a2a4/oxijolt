@@ -14,6 +14,20 @@ Other topics have guides of their own: [constraints](constraints.md), [soft bodi
 
 Units are metres, seconds, kilograms and radians. Jolt is right-handed with Y up.
 
+## Native inertia queries
+
+Dynamic rigid bodies expose `BodyRef::world_inverse_inertia` (three world-space
+columns about the centre of mass, in kg⁻¹ m⁻²) and
+`BodyRef::angular_impulse_inverse_inertia_bound` (the largest unmasked native
+principal inverse moment used by impulse validation). Locked rotation axes can
+hide that bound in the world tensor. Both queries return `None` for static,
+kinematic or soft bodies, or when the body cannot be read.
+
+The world-space tensor includes the body's rotation and allowed rotational degrees
+of freedom. The scalar bound is taken before those degrees of freedom are masked:
+use it when matching the validation performed by angular impulse calls. Reading
+either value takes the body's read lock and leaves its mass properties unchanged.
+
 ## Layers and groups
 
 Every body lives in one **object layer**, and each object layer is kept in one **broad-phase

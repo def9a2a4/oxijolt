@@ -2,6 +2,13 @@
 
 All notable changes to this fork. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+- Add read-locked `BodyRef::world_inverse_inertia` and
+  `BodyRef::angular_impulse_inverse_inertia_bound` queries for native rotational
+  response and the unmasked angular impulse guard. Static, kinematic and soft
+  bodies return `None`; authored mass properties are unchanged.
+
 ## 1.2.0 — 2026-10-21
 
 - `PhysicsWorld::step_with_collision_steps(delta_time, collision_steps)` advances the world by

@@ -43,6 +43,65 @@ impl std::fmt::Debug for BodyRef<'_> {
 }
 
 impl BodyRef<'_> {
+    /// Largest native principal inverse inertia in kg⁻¹ m⁻².
+    ///
+    /// This is the scalar used to validate angular impulses before locked angular
+    /// degrees of freedom are masked. A norm of `world_inverse_inertia` alone
+    /// cannot reproduce that bound for bodies with locked axes. Returns `None`
+    /// for non-dynamic or soft bodies, or a failed read.
+    pub fn angular_impulse_inverse_inertia_bound(&self) -> Option<f32> {
+        with_read_locked_body(self.body_lock_interface, self.id, |body| {
+            // SAFETY: the helper holds the read lock throughout this closure.
+            // A dynamic rigid body has live motion properties. These getters read
+            // their values and write only the initialized local vector below.
+            unsafe {
+                if !JPH_Body_IsRigidBody(body.as_ptr()) || !JPH_Body_IsDynamic(body.as_ptr()) {
+                    return None;
+                }
+                let mut diagonal = Vec3::ZERO.to_jph();
+                JPH_MotionProperties_GetInverseInertiaDiagonal(
+                    JPH_Body_GetMotionProperties(body.as_ptr()),
+                    &mut diagonal,
+                );
+                Some(diagonal.x.max(diagonal.y).max(diagonal.z))
+            }
+        })
+        .flatten()
+    }
+
+    /// Actual inverse inertia about the centre of mass, in world coordinates.
+    ///
+    /// Returns the three matrix columns in kg⁻¹ m⁻², including the body's rotation
+    /// and allowed rotational degrees of freedom. `None` for static, kinematic or
+    /// soft bodies, or if the body can no longer be read.
+    pub fn world_inverse_inertia(&self) -> Option<[Vec3; 3]> {
+        with_read_locked_body(self.body_lock_interface, self.id, |body| {
+            // SAFETY: the existing body-read helper holds this body's read lock
+            // throughout the closure. Both predicates only read the locked body.
+            // GetInverseInertia requires a dynamic rigid body; check that before
+            // invoking it. The native getter initializes every matrix component.
+            unsafe {
+                if !JPH_Body_IsRigidBody(body.as_ptr()) || !JPH_Body_IsDynamic(body.as_ptr()) {
+                    return None;
+                }
+                let mut matrix = JPH_Mat4 {
+                    column: [JPH_Vec4 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        w: 0.0,
+                    }; 4],
+                };
+                JPH_Body_GetInverseInertia(body.as_ptr(), &mut matrix);
+                Some([0, 1, 2].map(|i| {
+                    let c = matrix.column[i];
+                    Vec3::new(c.x, c.y, c.z)
+                }))
+            }
+        })
+        .flatten()
+    }
+
     /// The body's id.
     pub fn id(&self) -> BodyId {
         self.id
