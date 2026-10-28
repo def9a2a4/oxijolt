@@ -30,20 +30,20 @@ const PER_KIND: usize = 8;
 /// Distance between neighbouring vehicles, m, so that each stays in its own island.
 const SPACING: Real = 25.0;
 
-/// Tire caps that depend only on the callback's input: less grip with more slip (the
+/// Tire friction that depends only on the callback's input: less grip with more slip (the
 /// longitudinal slip is huge for a spinning wheel at rest, hence the bound), scaled by
 /// `constant`.
 fn slip_grip(
     constant: f32,
     calls: Arc<AtomicUsize>,
-) -> impl Fn(&TireMaxImpulseInput) -> TireMaxImpulse + Send + Sync + 'static {
+) -> impl Fn(&TireMaxImpulseInput) -> TireFriction + Send + Sync + 'static {
     move |input| {
         calls.fetch_add(1, Ordering::Relaxed);
-        let caps = input.default_max_impulse();
-        TireMaxImpulse {
-            longitudinal: constant * caps.longitudinal
+        let friction = input.default_friction();
+        TireFriction {
+            longitudinal: constant * friction.longitudinal
                 / (1.0 + 0.05 * input.longitudinal_slip.min(10.0)),
-            lateral: constant * caps.lateral * (1.0 - 0.25 * input.lateral_slip),
+            lateral: constant * friction.lateral * (1.0 - 0.25 * input.lateral_slip),
         }
     }
 }
@@ -85,9 +85,7 @@ impl Scene {
                 let car = world.create_wheeled_vehicle(body, &settings).unwrap();
                 let mut vehicle = world.vehicle_mut(car).unwrap();
                 vehicle.set_gravity(GRAVITY).unwrap();
-                vehicle
-                    .set_tire_max_impulse_callback(slip_grip(grip, Arc::clone(&calls)))
-                    .unwrap();
+                vehicle.set_tire_max_impulse_callback(slip_grip(grip, Arc::clone(&calls)));
                 chassis.push(body);
                 car
             })
@@ -103,8 +101,7 @@ impl Scene {
                 world
                     .vehicle_mut(bike)
                     .unwrap()
-                    .set_tire_max_impulse_callback(slip_grip(grip, Arc::clone(&calls)))
-                    .unwrap();
+                    .set_tire_max_impulse_callback(slip_grip(grip, Arc::clone(&calls)));
                 chassis.push(body);
                 bike
             })

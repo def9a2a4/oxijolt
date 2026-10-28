@@ -237,7 +237,7 @@ impl PhysicsWorld {
     }
 
     /// The mass properties of `body`, a chassis [`check_chassis`](Self::check_chassis) accepted.
-    pub(super) fn chassis_mass(&self, body: BodyId) -> ChassisMass {
+    fn chassis_mass(&self, body: BodyId) -> ChassisMass {
         with_read_locked_body(self.body_lock_interface, body, |chassis| {
             // SAFETY: the chassis is locked for reading for the call and dynamic.
             unsafe { read_chassis_mass(chassis) }

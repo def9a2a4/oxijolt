@@ -242,7 +242,7 @@ pub use soft_body::{
 };
 pub use state::{BodySelection, WorldState};
 pub use vehicle::{
-    AnyVehicleId, DriverInput, Motorcycle, MotorcycleLean, MotorcycleSettings, TireMaxImpulse,
+    AnyVehicleId, DriverInput, Motorcycle, MotorcycleLean, MotorcycleSettings, TireFriction,
     TireMaxImpulseInput, TrackSide, TrackState, TrackedDriverInput, TrackedVehicle,
     TrackedVehicleSettings, TrackedWheelSettings, VehicleAntiRollBar, VehicleCollisionTester,
     VehicleDifferentialSettings, VehicleEngineSettings, VehicleId, VehicleKind, VehicleMut,

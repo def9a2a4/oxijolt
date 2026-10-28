@@ -1146,81 +1146,6 @@ Not covered:
   ground friction 1000, rubble of 1 and 10 kg and a 1 kg slab brought the chassis to the clamp in up
   to 9 of 384 runs per hull (at most 1 with tracks of 1e-3 kg·m²).
 
-## Wheel mass ratio
-
-Under each unbraked wheel in contact, Jolt sizes the longitudinal impulse as the
-[track mass ratio](#track-mass-ratio) describes for tracks, with the wheel's own inertia:
-`(ω − v/r)·I/r`, the slip times the wheel's mass `M = I/r²` at the ground
-(`WheeledVehicleController.cpp:705-718`). It then clamps the accumulated impulse to the tire's
-longitudinal cap and turns the wheel back by what it applied. Each such correction leaves the
-slip at `−M·w` times what it was, `w` the chassis' inverse effective mass at the contact along the
-longitudinal direction. As one row of Jolt's iteration this is a Gauss-Seidel step relaxed by
-`1 + M·w`: the iteration keeps converging while every wheel's `M·w` is below 1 (relaxation below
-2), whatever the caps, and above it overshoots further on every pass. Jolt's default cap, the
-tire's friction times the suspension impulse, stops a heavy wheel's overshoot early; a callback's
-caps need not.
-
-`VehicleMut::set_tire_max_impulse_callback` computes `M·w` for every wheel of a wheeled vehicle or
-motorcycle, from the chassis' mass properties of creation, which cannot change while the vehicle
-exists, and refuses the callback when any wheel's exceeds `MAX_WHEEL_MASS_RATIO` (1). Wheels cannot
-change after creation either; `VehicleMut::set_collision_tester` checks the new tester the same way
-while a callback is installed. `w` is the largest inverse effective mass `1/m + |I^(-1/2) (r × d)|²`
-(principal frame) over every longitudinal direction `d` and every contact point `r` Jolt can use:
-
-- Directions. Jolt's longitudinal direction is `normal × right` of the wheel's steered basis
-  (`VehicleConstraint.cpp:254-266`), the forward/up plane turned about the steering axis by the
-  steering angle (`GetWheelLocalBasis`), which both controllers keep within `±max_steer_angle`.
-  Over every ground normal it takes every direction of that turned plane. The largest lever over a
-  plane has a closed form; over the steering range it is taken at 33 evenly spaced angles, plus
-  `(step/2)·|r|·√(I⁻¹max)`, since a direction turned by an angle moves by at most that angle. A
-  steered wheel pushes the chassis sideways too: on a long chassis with little yaw inertia this
-  lever is several times the unsteered one.
-- Contacts. The lever's maximum over the directions is convex in `r`, so along the suspension
-  travel (attachment point to the end of the longest suspension) it is largest at an end. Each
-  tester puts the contact within a radius `ρ` of the travel, which adds at most `ρ·√(I⁻¹max)`: the
-  ray the wheel radius, the sphere the larger of the wheel and sphere radii, the cylinder
-  `√(radius² + (width/2)²)`. With a suspension force point the lever at that point counts too.
-
-Tracked wheels do not steer and keep the [track mass ratio](#track-mass-ratio)'s tester-free
-contact bound. Jolt's `MotorcycleTest` motorcycle (240 kg, wheels of 0.9 kg·m², front steering
-30° about a raked axis) has a ratio of 0.72 with a ray, a cylinder or a sphere of the wheel's
-radius; the 1500 kg 1.8 × 0.6 × 4 m box car of the tests with its centre of mass in the middle,
-wheels of 0.9 kg·m² and radius 0.35, a ray tester and front wheels steering 70°, 0.050.
-
-Measured with infinite caps through the safe API in the default build, for 18 chassis (150, 400,
-1500 and 4000 kg; a 1.8 × 0.6 × 4 m box with the centre of mass in the middle or on the bottom
-face, a narrow flat 1 × 0.2 × 2 m box, a 3 × 1.2 × 6 m box with the centre of mass moved up and
-forward; and at 1500 kg a tall narrow 0.6 × 4 × 0.6 m box and a 1.2 × 0.6 × 6.4 m box with provided
-inertia 2000, 100, 2000 kg·m², both with wheels 3 m ahead and behind), wheels of radius 0.2, 0.35
-and 0.8, ray, sphere and cylinder testers, front wheels steering up to 0°, 30°, 70° and 89°, on
-flat ground and a 23° slope, from 10 m/s through throttle, full steering, brakes, hand brake and
-reverse or inputs that flip every step, at 1/240, 1/60 and 0.1 s for 4 s (at most 400 steps), with
-the wheel inertia scaled to a given ratio: 7776 runs per ratio. A run failed when the chassis came
-within 10 % of Jolt's angular velocity clamp (15π rad/s), above 400 m/s, or to exactly zero
-velocity (an overflowing clamp).
-- With near-massless wheels (ratio 0.01), 14 runs failed, all on the narrow flat chassis: it spins
-  up at full steering with infinite grip.
-- At ratios of 0.5 and 1: 1 and 3 runs failed, all on the narrow flat chassis.
-- At 1.5, 2, 3 and 4: 69, 544, 4180 and 6512, on every chassis.
-
-A ratio over the unsteered forward/up plane alone accepted wheels of 3.8 kg·m² on the tall box and
-5.0 kg·m² on the box with provided inertia (ratios 4.4 and 5.0 here); steering 60° to 80° with
-infinite caps, they reached Jolt's velocity clamps within 11 steps.
-
-The 1500 kg box car of the tests with all four wheels steering 70° passed with wheels of
-30 kg·m² and failed with 40 kg·m²; with 1000 kg·m² infinite or `f32::MAX` caps sent it to the
-500 m/s clamp in the first step and to NaN in the third.
-
-Not covered:
-- Steps longer than 0.1 s.
-- A dynamic body under the wheels adds its inverse mass to `w`, which the ratio does not count.
-  The 1500 kg car with its centre of mass on the bottom face, front wheels steering 70° and wheels
-  at a ratio of 1 (24 kg·m²), drove over six slabs of 1, 10 or 100 kg at 1/60 s with infinite caps
-  without failing; nothing more was measured.
-- Jolt's default caps with a heavy wheel and a huge friction curve: friction curve values are not
-  bounded, and a 1500 kg chassis on wheels of 1000 kg·m² with friction 1e30 was thrown 395 m up
-  while settling, without any callback.
-
 ## Motorcycle lean
 
 **Lean angle.** With the lean steering limit on, Jolt limits the steering angle to
@@ -1268,6 +1193,41 @@ sliding on a floor, both at `f32::MAX`, had NaN velocities within three 60 Hz st
 
 `MAX_FRICTION` keeps that product finite: any coefficient whose square is finite (below about
 1.8e19) does, and 1000 is far above the friction of real materials.
+
+### Tire friction
+
+A tire max impulse callback returns two friction coefficients. The binding clamps each to
+`0..=MAX_FRICTION`, NaN to 0, and hands Jolt the coefficient times the suspension impulse as the
+tire's impulse cap, the formula of Jolt's default (`WheeledVehicleController.h:191-196`). Without
+a callback the coefficient is the wheel's friction curve combined with the ground's friction,
+`sqrt(curve · ground)` (`VehicleConstraint.h:238-243`), which Jolt reads nowhere else. A curve
+of `MAX_FRICTION` on ground of `MAX_FRICTION` gives exactly `MAX_FRICTION`, so a callback can
+give a wheel no grip a vehicle without one cannot have, and the cap is finite for the reason
+above.
+
+That much grip does not keep Jolt's solver stable. Jolt sizes each wheel's longitudinal impulse
+for the wheel alone, `(ω − v/r)·I/r` (`WheeledVehicleController.cpp:705-718`), as if the chassis
+stood still, and bounds it only by the cap, so on wheels heavy against their chassis a large cap
+lets the iteration overshoot. Measured through the safe API in the default build: a 1500 kg
+chassis on four wheels of radius 0.35 with a ray tester, settled on flat ground and driven from
+10 m/s through throttle, full steering, brakes and reverse for 4 s, at 1/60 and 0.1 s. With
+friction `MAX_FRICTION` the callback and the curves gave bit-identical runs
+(`the_largest_friction_of_a_callback_matches_the_largest_friction_curves`):
+- a 1.8 × 0.6 × 4 m box on wheels of 1000 kg·m², front wheels steering 70°: Jolt's 500 m/s clamp
+  at tick 227 (1/60 s) and 38 (0.1 s);
+- a 1 × 0.6 × 1 m box on wheels of 8.4 kg·m² at (±0.5, −0.3, ±0.75) with suspension force points
+  at a height of 1.15 m, above the centre of mass: the 15π rad/s clamp at tick 130 and 36;
+- a 0.6 × 4 × 0.6 m box with wheels of 3.84 kg·m² 3 m ahead and behind, front wheels steering 70°:
+  at most 12.5 m/s and 9.3 rad/s.
+
+With Jolt's default curves on ground of friction 0.2 none of the three reached a clamp; the
+second came closest, 40.6 rad/s at 0.1 s.
+
+Not covered:
+- Wheels heavy against their chassis at large friction, from a callback or from curves: no bound
+  on the wheel inertia is derived, and the first two cases above reach Jolt's clamps.
+- Friction curve values are not bounded: a 1500 kg chassis on wheels of 1000 kg·m² with friction
+  1e30 was thrown 395 m up while settling, without any callback.
 
 ## Coupling ratios
 

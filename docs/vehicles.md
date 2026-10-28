@@ -213,36 +213,31 @@ rollback that should replay a change makes it again ([state](state.md#what-is-no
 
 ### Tire grip
 
-Without a callback, Jolt caps the impulse each tire can put on the ground in a collision step at
-its friction times the suspension impulse, along and across the wheel.
-`set_tire_max_impulse_callback` replaces that formula for one wheeled vehicle or motorcycle. The
-closure gets a `TireMaxImpulseInput` (wheel index, suspension impulse, both friction coefficients,
-both slips, the collision step's length) and returns a `TireMaxImpulse` of two caps in N·s;
-`input.default_max_impulse()` is Jolt's formula. NaN and negative caps count as 0, and
-`f32::INFINITY` is no cap.
+Jolt caps the impulse each tire can put on the ground in a collision step at a friction
+coefficient times the suspension impulse, along and across the wheel. Without a callback the
+coefficients are the wheel's friction curves at the current slip, combined with the ground's
+friction. `set_tire_max_impulse_callback` replaces those coefficients for one wheeled vehicle or
+motorcycle. The closure gets a `TireMaxImpulseInput` (wheel index, suspension impulse, both
+combined friction coefficients, both slips, the collision step's length) and returns a
+`TireFriction` of two coefficients; `input.default_friction()` is Jolt's own. Each coefficient is
+clamped to `0..=limits::MAX_FRICTION`, NaN counts as 0, and the cap stays Jolt's formula,
+coefficient times suspension impulse.
 
-Jolt sizes each wheel's drive impulse as if the chassis stood still, and at ordinary friction
-the default caps keep a wheel that is heavy against its chassis from overshooting. The callback is
-therefore refused, with `VehicleError::InvalidValue`, when a wheel's inertia over its radius
-squared is large against the chassis' effective mass at that wheel
-(`limits::MAX_WHEEL_MASS_RATIO`, [limits](limits.md#wheel-mass-ratio)). Steering counts: a
-steered wheel also pushes the chassis sideways, which turns a long chassis with little yaw
-inertia much more easily than it pushes it forward. Jolt's `MotorcycleTest` motorcycle is inside
-with a ratio of 0.72; a 1500 kg 1.8 × 0.6 × 4 m box on wheels of radius 0.35 m with a ray tester
-takes a callback with wheels up to about 22 kg·m², or 18 kg·m² when its front wheels steer 70°.
-While a callback is installed, `set_collision_tester` refuses a tester that would put a wheel
-above the ratio.
+So a callback gives a wheel no more grip than a friction curve of `MAX_FRICTION` on ground of
+`MAX_FRICTION` gives it, and has the same stability: that much grip on wheels heavy against their
+chassis can throw the chassis to Jolt's velocity clamps with or without a callback
+([limits](limits.md#tire-friction)).
 
 - **Threads.** The solver calls the closure for each wheel with ground contact in every velocity
   iteration it runs, on its worker threads, concurrently with other vehicles' callbacks but never
   with another call of the same vehicle. The closure is `Fn + Send + Sync + 'static`. The number
   of calls is not fixed: the solver stops iterating early when no impulse changes.
-- **Determinism.** For results that do not depend on the thread count, the caps must depend only
-  on the input and on data that does not change during the step: no counters, clocks or state
-  shared between calls. `tests/vehicle_tuning_determinism.rs` checks such callbacks with 1 and 4
+- **Determinism.** For results that do not depend on the thread count, the coefficients must
+  depend only on the input and on data that does not change during the step: no counters, clocks
+  or state shared between calls. `tests/vehicle_tuning_determinism.rs` checks such callbacks with 1 and 4
   workers and in two processes.
-- **Panics.** A panic in the closure gives that vehicle Jolt's caps for the rest of the step, and
-  `step` resumes the panic after the update. The world stays usable.
+- **Panics.** A panic in the closure gives that vehicle Jolt's friction for the rest of the step,
+  and `step` resumes the panic after the update. The world stays usable.
 - **Lifetime.** The closure is dropped when it is replaced or cleared, with its vehicle, or with
   the world. A restore keeps it and does not rewind what it captured; a rebase keeps it too.
 
@@ -285,9 +280,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Arcade grip: half again as much sideways grip as Jolt gives.
     vehicle.set_tire_max_impulse_callback(|input| {
-        let jolt = input.default_max_impulse();
-        TireMaxImpulse { lateral: 1.5 * jolt.lateral, ..jolt }
-    })?;
+        let jolt = input.default_friction();
+        TireFriction { lateral: 1.5 * jolt.lateral, ..jolt }
+    });
 
     let input = DriverInput { forward: 1.0, ..DriverInput::default() };
     world.vehicle_mut(car)?.set_driver_input(input)?;

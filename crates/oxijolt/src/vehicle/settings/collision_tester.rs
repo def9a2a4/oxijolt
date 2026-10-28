@@ -4,7 +4,6 @@ use std::f32::consts::PI;
 
 use oxijolt_sys::*;
 
-use super::wheel::WheelBase;
 use super::WheelGeometry;
 use crate::math::{is_finite_non_negative, is_finite_positive, is_unit};
 use crate::owned::{JoltObject, Owned};
@@ -128,21 +127,6 @@ impl VehicleCollisionTester {
                 max_slope_angle,
             },
             cylinder @ Self::CastCylinder { .. } => cylinder,
-        }
-    }
-
-    /// How far from its suspension travel, the segment from the attachment point to the end of
-    /// the longest suspension, this tester puts the contact of `wheel`.
-    pub(super) fn contact_radius(&self, wheel: &WheelBase) -> f64 {
-        let radius = f64::from(wheel.radius);
-        match *self {
-            // On the ray, at most `radius` past the end of the travel.
-            Self::Ray { .. } => radius,
-            // On a sphere of `sphere` cast along the travel, at most `radius - sphere` past its
-            // end (`VehicleCollisionTesterCastSphere::Collide`).
-            Self::CastSphere { radius: sphere, .. } => radius.max(f64::from(sphere)),
-            // On a cylinder of the wheel's radius and width cast along the travel.
-            Self::CastCylinder { .. } => radius.hypot(0.5 * f64::from(wheel.width)),
         }
     }
 

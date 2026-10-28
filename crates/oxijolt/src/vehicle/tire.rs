@@ -10,9 +10,9 @@ use oxijolt_sys::{
     JPH_WheeledVehicleController_SetTireMaxImpulseCallback,
 };
 
-use super::{VehicleCollisionTester, VehicleEntry, VehicleMut, VehicleRef, WheeledControllerKind};
+use super::{VehicleMut, VehicleRef, WheeledControllerKind};
+use crate::limits;
 use crate::panic_slot::PanicSlot;
-use crate::{limits, VehicleError};
 
 /// What Jolt hands a tire max impulse callback for one wheel with ground contact (see
 /// [`VehicleMut::set_tire_max_impulse_callback`]).
@@ -42,45 +42,63 @@ pub struct TireMaxImpulseInput {
 }
 
 impl TireMaxImpulseInput {
-    /// Jolt's own caps, which a vehicle without a callback uses: each friction coefficient times
-    /// the suspension impulse.
-    pub fn default_max_impulse(&self) -> TireMaxImpulse {
-        TireMaxImpulse {
-            longitudinal: self.longitudinal_friction * self.suspension_impulse,
-            lateral: self.lateral_friction * self.suspension_impulse,
+    /// Jolt's own friction coefficients, which a vehicle without a callback uses:
+    /// [`longitudinal_friction`](Self::longitudinal_friction) and
+    /// [`lateral_friction`](Self::lateral_friction).
+    pub fn default_friction(&self) -> TireFriction {
+        TireFriction {
+            longitudinal: self.longitudinal_friction,
+            lateral: self.lateral_friction,
         }
+    }
+
+    /// Jolt's caps on the tire impulses for `friction`: each coefficient times the suspension
+    /// impulse.
+    fn max_impulses(&self, friction: TireFriction) -> [f32; 2] {
+        [
+            friction.longitudinal * self.suspension_impulse,
+            friction.lateral * self.suspension_impulse,
+        ]
     }
 }
 
-/// The caps a tire max impulse callback returns for one wheel, N·s. They bound the impulses the
-/// tire may apply on the ground in this collision step; the impulses Jolt applies can be lower.
-/// NaN and negative values count as 0; [`f32::INFINITY`] is no cap. A vehicle takes a callback
-/// only while its wheels are light against its chassis ([`limits::MAX_WHEEL_MASS_RATIO`]).
+/// The friction coefficients a tire max impulse callback returns for one wheel. Jolt caps the
+/// impulse the tire may apply on the ground in this collision step at each coefficient times the
+/// [suspension impulse](TireMaxImpulseInput::suspension_impulse), as it does with its own
+/// combined friction; the impulses it applies can be lower. Each coefficient is clamped to
+/// `0..=`[`limits::MAX_FRICTION`], the bound of a body's friction, and NaN counts as 0.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TireMaxImpulse {
-    /// Cap on the impulse along the wheel's forward direction, drive and brakes.
+pub struct TireFriction {
+    /// Friction coefficient along the wheel's forward direction, drive and brakes.
     pub longitudinal: f32,
-    /// Cap on the impulse along the wheel's sideways direction.
+    /// Friction coefficient along the wheel's sideways direction.
     pub lateral: f32,
 }
 
-impl TireMaxImpulse {
-    /// The caps with NaN and negative values replaced by 0.
-    fn sanitized(self) -> Self {
-        // `f32::max` returns the other operand for NaN.
+impl TireFriction {
+    /// The coefficients clamped to `0..=MAX_FRICTION`, NaN replaced by 0.
+    fn clamped(self) -> Self {
+        // `f32::clamp` keeps NaN.
+        let clamp = |friction: f32| {
+            if friction.is_nan() {
+                0.0
+            } else {
+                friction.clamp(0.0, limits::MAX_FRICTION)
+            }
+        };
         Self {
-            longitudinal: self.longitudinal.max(0.0),
-            lateral: self.lateral.max(0.0),
+            longitudinal: clamp(self.longitudinal),
+            lateral: clamp(self.lateral),
         }
     }
 }
 
-type TireMaxImpulseFn = dyn Fn(&TireMaxImpulseInput) -> TireMaxImpulse + Send + Sync;
+type TireFrictionFn = dyn Fn(&TireMaxImpulseInput) -> TireFriction + Send + Sync;
 
 /// A vehicle's tire max impulse callback, whose address is the `userData` Jolt passes to
 /// [`tire_max_impulse`].
 pub(super) struct TireCallback {
-    callback: Box<TireMaxImpulseFn>,
+    callback: Box<TireFrictionFn>,
     panic: PanicSlot,
 }
 
@@ -92,8 +110,9 @@ impl TireCallback {
 }
 
 /// The `JPH_TireMaxImpulseCallback` of every vehicle with a Rust callback. Writes both caps on
-/// every path: the callback's, sanitized, or Jolt's default once the callback panicked in this
-/// step. A panic is kept for the world to resume and never unwinds into Jolt.
+/// every path: the callback's coefficients, clamped, times the suspension impulse, or Jolt's
+/// default once the callback panicked in this step. A panic is kept for the world to resume and
+/// never unwinds into Jolt.
 ///
 /// # Safety
 /// `user_data` is the address of a [`TireCallback`] that lives for the call. The out pointers
@@ -122,22 +141,22 @@ unsafe extern "C" fn tire_max_impulse(
         lateral_slip,
         delta_time,
     };
-    let default = input.default_max_impulse();
-    let caps = if tire.panic.has_panicked() {
-        default
+    let friction = if tire.panic.has_panicked() {
+        input.default_friction()
     } else {
         match catch_unwind(AssertUnwindSafe(|| (tire.callback)(&input))) {
-            Ok(caps) => caps.sanitized(),
+            Ok(friction) => friction.clamped(),
             Err(payload) => {
                 tire.panic.record(payload);
-                default
+                input.default_friction()
             }
         }
     };
+    let [longitudinal, lateral] = input.max_impulses(friction);
     // SAFETY: both pointers are Jolt's writable locals of this call (contract).
     unsafe {
-        out_longitudinal.write(caps.longitudinal);
-        out_lateral.write(caps.lateral);
+        out_longitudinal.write(longitudinal);
+        out_lateral.write(lateral);
     }
 }
 
@@ -157,9 +176,16 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
         self.controller().cast()
     }
 
-    /// Replaces how the vehicle caps its tire impulses (Jolt
-    /// `WheeledVehicleController::SetTireMaxImpulseCallback`); without a callback the caps are
-    /// [`TireMaxImpulseInput::default_max_impulse`]. A callback replaces the one set before.
+    /// Replaces the friction coefficients that cap the vehicle's tire impulses (Jolt
+    /// `WheeledVehicleController::SetTireMaxImpulseCallback`); without a callback they are
+    /// [`TireMaxImpulseInput::default_friction`], the wheel's friction curves combined with the
+    /// ground's friction. A callback replaces the one set before.
+    ///
+    /// Jolt caps each tire impulse at a coefficient times the suspension impulse with or
+    /// without a callback, and the callback's coefficients ([`TireFriction`]) are clamped to
+    /// [`limits::MAX_FRICTION`]. A callback therefore gives a wheel at most the grip of a
+    /// friction curve of `MAX_FRICTION` on ground of `MAX_FRICTION`
+    /// ([docs/limits.md#tire-friction]).
     ///
     /// Jolt calls `callback` for each wheel with ground contact in every velocity iteration the
     /// solver runs, in every collision step. The number of calls is not fixed: the solver stops
@@ -168,18 +194,14 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
     /// vehicle. For results that do not depend on the thread count, the result must depend
     /// only on the input and on data that does not change during the step.
     ///
-    /// A panic in `callback` makes the vehicle use Jolt's default caps for the rest of that
-    /// step, and [`step`](crate::PhysicsWorld::step) resumes the panic afterwards. A panic
+    /// A panic in `callback` makes the vehicle use Jolt's default coefficients for the rest of
+    /// that step, and [`step`](crate::PhysicsWorld::step) resumes the panic afterwards. A panic
     /// that aborts the process is not caught.
     ///
     /// The callback and what it captures are not part of [`WorldState`](crate::WorldState):
     /// [`restore_state`](crate::PhysicsWorld::restore_state) keeps the callback and does not
     /// rewind its captured state. [`rebase`](crate::PhysicsWorld::rebase) keeps it too, since
     /// its input does not depend on the frame. The callback is dropped with the vehicle.
-    ///
-    /// # Errors
-    /// [`VehicleError::InvalidValue`] when a wheel is heavy against the chassis
-    /// ([`limits::MAX_WHEEL_MASS_RATIO`]); the vehicle keeps Jolt's default caps.
     ///
     /// # Example
     /// A tire with 80 % of Jolt's grip sideways:
@@ -204,19 +226,20 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
     /// let car = world.create_wheeled_vehicle(chassis, &settings)?;
     ///
     /// world.vehicle_mut(car)?.set_tire_max_impulse_callback(|input| {
-    ///     let default = input.default_max_impulse();
-    ///     TireMaxImpulse { lateral: 0.8 * default.lateral, ..default }
-    /// })?;
+    ///     let default = input.default_friction();
+    ///     TireFriction { lateral: 0.8 * default.lateral, ..default }
+    /// });
     /// assert!(world.vehicle(car)?.has_tire_max_impulse_callback());
     /// assert!(world.step(1.0 / 60.0)?.is_complete());
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// [docs/limits.md#tire-friction]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#tire-friction
     pub fn set_tire_max_impulse_callback(
         &mut self,
-        callback: impl Fn(&TireMaxImpulseInput) -> TireMaxImpulse + Send + Sync + 'static,
-    ) -> Result<(), VehicleError> {
-        check_wheel_mass_ratio(self.entry, &self.entry.collision_tester)?;
+        callback: impl Fn(&TireMaxImpulseInput) -> TireFriction + Send + Sync + 'static,
+    ) {
         let tire = Box::new(TireCallback {
             callback: Box::new(callback),
             panic: PanicSlot::default(),
@@ -239,12 +262,11 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
             )
         };
         drop(replaced);
-        Ok(())
     }
 
-    /// Removes the tire max impulse callback, so that the vehicle uses Jolt's default caps
-    /// ([`TireMaxImpulseInput::default_max_impulse`]) from the next step on, and drops it. Does
-    /// nothing without one.
+    /// Removes the tire max impulse callback, so that the vehicle uses Jolt's default
+    /// coefficients ([`TireMaxImpulseInput::default_friction`]) from the next step on, and drops
+    /// it. Does nothing without one.
     pub fn clear_tire_max_impulse_callback(&mut self) {
         if self.entry.tire_callback.is_none() {
             return;
@@ -257,18 +279,37 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
     }
 }
 
-/// Refuses wheels heavy against the chassis of the wheeled vehicle or motorcycle `entry` with
-/// the collision `tester` ([`limits::MAX_WHEEL_MASS_RATIO`]).
-pub(super) fn check_wheel_mass_ratio(
-    entry: &VehicleEntry,
-    tester: &VehicleCollisionTester,
-) -> Result<(), VehicleError> {
-    let ratio = entry
-        .drivetrain
-        .largest_wheel_mass_ratio(&entry.chassis, tester);
-    if limits::is_wheel_mass_ratio(ratio) {
-        Ok(())
-    } else {
-        Err(VehicleError::InvalidValue(limits::WHEEL_MASS_RATIO_RULE))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coefficients_are_clamped_to_the_friction_bounds() {
+        let max = limits::MAX_FRICTION;
+        let cases = [
+            (f32::NAN, 0.0),
+            (f32::NEG_INFINITY, 0.0),
+            (-1.0, 0.0),
+            (0.5, 0.5),
+            (max, max),
+            (max.next_up(), max),
+            (f32::MAX, max),
+            (f32::INFINITY, max),
+        ];
+        for (value, expected) in cases {
+            let longitudinal = TireFriction {
+                longitudinal: value,
+                lateral: 0.5,
+            };
+            let lateral = TireFriction {
+                longitudinal: 0.5,
+                lateral: value,
+            };
+            assert_eq!(
+                longitudinal.clamped().longitudinal.to_bits(),
+                expected.to_bits()
+            );
+            assert_eq!(lateral.clamped().lateral.to_bits(), expected.to_bits());
+        }
     }
 }

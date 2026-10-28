@@ -48,14 +48,10 @@ fn round(world: &mut PhysicsWorld, layers: &CarLayers) {
     let mut vehicle = world.vehicle_mut(bike).unwrap();
     vehicle.set_gravity(GRAVITY).unwrap();
     vehicle.set_driver_input(ride(0.5, 0.2)).unwrap();
-    vehicle
-        .set_tire_max_impulse_callback(|input| input.default_max_impulse())
-        .unwrap();
+    vehicle.set_tire_max_impulse_callback(|input| input.default_friction());
     assert!(world.step(DT).unwrap().is_complete());
     let mut vehicle = world.vehicle_mut(bike).unwrap();
-    vehicle
-        .set_tire_max_impulse_callback(|_| TireMaxImpulse::default())
-        .unwrap();
+    vehicle.set_tire_max_impulse_callback(|_| TireFriction::default());
     vehicle.clear_tire_max_impulse_callback();
     vehicle.set_engine(bike_engine().max_torque(170.0)).unwrap();
     vehicle.set_transmission(bike_transmission()).unwrap();
