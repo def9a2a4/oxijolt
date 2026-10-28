@@ -26,7 +26,11 @@ what is planned next.
   bars; tracked vehicles (tanks) with two tracks; motorcycles with a lean controller
   ([guide](vehicles.md)); presets for a car and a motorcycle (`WheeledVehicleSettings::car`,
   `MotorcycleSettings::bike`), and each wheel's pose in world space for drawing
-  (`VehicleRef::wheel_world_transform`).
+  (`VehicleRef::wheel_world_transform`). Engine, transmission, differentials and tracks change
+  while a vehicle drives, and a per-vehicle callback sets each tire's grip
+  ([guide](vehicles.md#tuning-a-vehicle-while-it-drives)).
+- A body's mass and inertia given directly instead of computed from its shape
+  (`BodySettings::mass_and_inertia`) ([guide](bodies.md#mass-and-inertia)).
 - Ragdolls from a skeleton, posed, motor-driven or kinematic, with settle detection, and a skeleton
   mapper to and from a detailed animation skeleton ([guide](guide.md#ragdolls)).
 - Twelve kinds of constraints with motors, springs and limits: fixed, point, distance, hinge,

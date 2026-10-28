@@ -97,6 +97,33 @@ JPH_CAPI bool JPH_MotorcycleController_GetTargetLean(const JPH_VehicleController
    it. Returns false, changing nothing, when controller is not a MotorcycleController. */
 JPH_CAPI bool JPH_MotorcycleController_SetTargetLean(JPH_VehicleController* controller, const JPH_Vec3* value);
 
+/* Live drivetrains: WheeledVehicleController and TrackedVehicleController */
+/* Each setter copies configuration only and keeps the runtime state (engine rpm; current gear, clutch
+   friction and the transmission's timers; track angular velocity). The change takes effect in the
+   next step; the caller has exclusive access to the controller (no step runs). The
+   JPH_WheeledVehicleController functions also accept a JPH_MotorcycleController, which derives from
+   it by single inheritance (joltc's cast convention). */
+/* Copies max torque, rpm range, inertia, angular damping and a deep copy of the normalized torque
+   curve. The engine's current rpm is kept; Jolt clamps it to the new range before using it. */
+JPH_CAPI void JPH_WheeledVehicleController_SetEngine(JPH_WheeledVehicleController* controller, const JPH_VehicleEngineSettings* settings);
+JPH_CAPI void JPH_TrackedVehicleController_SetEngine(JPH_TrackedVehicleController* controller, const JPH_VehicleEngineSettings* settings);
+/* Returns false and changes nothing when the number of forward or reverse gears, or the clutch
+   release time, differs from the controller's: Jolt's state keeps the current gear and the
+   clutch release countdown, which index the ratios and divide by the release time. */
+JPH_CAPI bool JPH_WheeledVehicleController_SetTransmission(JPH_WheeledVehicleController* controller, const JPH_VehicleTransmissionSettings* settings);
+JPH_CAPI bool JPH_TrackedVehicleController_SetTransmission(JPH_TrackedVehicleController* controller, const JPH_VehicleTransmissionSettings* settings);
+/* Replaces the differentials with count copies of values (which may be null when count is 0). Each
+   wheel index must be -1 or name a wheel of the vehicle: Jolt does not check them. */
+JPH_CAPI void JPH_WheeledVehicleController_SetDifferentials(JPH_WheeledVehicleController* controller, const JPH_VehicleDifferentialSettings* values, uint32_t count);
+JPH_CAPI void JPH_WheeledVehicleController_SetDifferentialLimitedSlipRatio(JPH_WheeledVehicleController* controller, float value);
+/* Copies inertia, angular damping, max brake torque and differential ratio into the track on side.
+   Returns false and changes nothing when side is not a track side, or when the driven wheel or
+   the wheel list differs from the track's: Jolt re-reads them every step. */
+JPH_CAPI bool JPH_TrackedVehicleController_SetTrack(JPH_TrackedVehicleController* controller, JPH_TrackSide side, const JPH_VehicleTrackSettings* track);
+/* Gives the controller Jolt's default tire max impulse callback again (friction times suspension
+   impulse); the callback and userData set before are no longer called once this returns. */
+JPH_CAPI void JPH_WheeledVehicleController_ResetTireMaxImpulseCallback(JPH_WheeledVehicleController* controller);
+
 /* RagdollSettings */
 /* Copies every BodyCreationSettings field (shape reference, collision group, damping, velocities, mass
    override, ...) into part partIndex; the part's constraint to its parent is kept. */

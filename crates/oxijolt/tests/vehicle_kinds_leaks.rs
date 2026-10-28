@@ -1,6 +1,8 @@
 //! A leak gate for tracked vehicles and motorcycles: every round creates a tank and a
 //! motorcycle on new chassis bodies, sets their input and gravity, steps once, reads tracks,
 //! lean (the target lean accessor builds and releases a settings object per call) and wheels,
+//! sets, replaces and clears the motorcycle's tire callback around that step, changes both
+//! drivetrains (engine, transmission, the motorcycle's differentials, the tank's tracks),
 //! replaces both testers, and removes both vehicles and both chassis.
 //!
 //! It measures the private bytes of the process, because these objects are allocated by C++,
@@ -46,7 +48,28 @@ fn round(world: &mut PhysicsWorld, layers: &CarLayers) {
     let mut vehicle = world.vehicle_mut(bike).unwrap();
     vehicle.set_gravity(GRAVITY).unwrap();
     vehicle.set_driver_input(ride(0.5, 0.2)).unwrap();
+    vehicle.set_tire_max_impulse_callback(|input| input.default_friction());
     assert!(world.step(DT).unwrap().is_complete());
+    let mut vehicle = world.vehicle_mut(bike).unwrap();
+    vehicle.set_tire_max_impulse_callback(|_| TireFriction::default());
+    vehicle.clear_tire_max_impulse_callback();
+    vehicle.set_engine(bike_engine().max_torque(170.0)).unwrap();
+    vehicle.set_transmission(bike_transmission()).unwrap();
+    let differential = VehicleDifferentialSettings::new(None, Some(1)).differential_ratio(5.5);
+    vehicle.set_differentials(vec![differential], 1.4).unwrap();
+    let mut vehicle = world.vehicle_mut(tank).unwrap();
+    vehicle
+        .set_engine(TrackedVehicleSettings::default_engine().max_torque(650.0))
+        .unwrap();
+    vehicle
+        .set_transmission(TrackedVehicleSettings::default_transmission())
+        .unwrap();
+    vehicle
+        .set_tracks(
+            tank_track(1.7).inertia(10.5),
+            tank_track(-1.7).inertia(10.5),
+        )
+        .unwrap();
 
     let vehicle = world.vehicle(tank).unwrap();
     assert!(vehicle.tracks().iter().all(|track| track.speed.is_finite()));

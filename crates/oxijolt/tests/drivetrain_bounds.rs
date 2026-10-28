@@ -1,6 +1,6 @@
-//! Drivetrain bounds: overflowing torque curves and tracked drivetrains are refused, and the
-//! strongest accepted ones stay finite through a step, with every wheel, track and chassis
-//! value read back. Tracks of very unequal inertia, and tracks heavy against their chassis, are
+//! Drivetrain bounds: overflowing torque curves and tracked drivetrains are refused, at creation
+//! and as live changes, and the strongest accepted ones stay finite through a step, with every
+//! wheel, track and chassis value read back. Tracks of very unequal inertia, and tracks heavy against their chassis, are
 //! refused; the widest accepted inertia ratio and the heaviest accepted tracks stay finite on
 //! high-friction ground.
 
@@ -798,4 +798,78 @@ fn motorcycle_engines_take_only_curves_in_the_domain() {
                 .unwrap()
         });
     }
+}
+
+#[test]
+fn overflowing_live_engines_and_transmissions_are_refused() {
+    let (mut world, layers) = car_world(GRAVITY, 1);
+    let chassis = world
+        .create_body(
+            &chassis_shape(),
+            &chassis_settings(&layers, RVec3::new(0.0, 100.0, 0.0), Quat::IDENTITY),
+        )
+        .unwrap();
+    let car = world
+        .create_wheeled_vehicle(
+            chassis,
+            &car_settings(VehicleCollisionTester::ray(layers.probe)),
+        )
+        .unwrap();
+    let bike_chassis = world
+        .create_body(
+            &bike_chassis_shape(),
+            &behaviour_chassis(
+                &layers,
+                BIKE_MASS,
+                RVec3::new(10.0, 100.0, 0.0),
+                Quat::IDENTITY,
+            ),
+        )
+        .unwrap();
+    let bike = world
+        .create_motorcycle(
+            bike_chassis,
+            &MotorcycleSettings::new(bike_vehicle_settings(bike_tester(&layers))),
+        )
+        .unwrap();
+    for curve in overflowing_curves() {
+        let engine = VehicleEngineSettings::default().normalized_torque(curve.clone());
+        assert_refused(
+            world.vehicle_mut(car).unwrap().set_engine(engine),
+            "torque curve",
+        );
+        let engine = bike_engine().normalized_torque(curve);
+        assert_refused(
+            world.vehicle_mut(bike).unwrap().set_engine(engine),
+            "torque curve",
+        );
+    }
+    // Gear ratios whose product with the differential ratio and the clutch overflows.
+    let huge = VehicleTransmissionSettings::default().gear_ratios(vec![1.0e38; 5]);
+    assert_refused(
+        world.vehicle_mut(car).unwrap().set_transmission(huge),
+        "clutch strength, ratios and wheel inertia give a non-finite step coefficient",
+    );
+    assert_eq!(
+        world.vehicle(car).unwrap().engine_settings(),
+        &VehicleEngineSettings::default()
+    );
+    assert_eq!(
+        world.vehicle(car).unwrap().transmission_settings(),
+        &VehicleTransmissionSettings::default()
+    );
+    assert_eq!(
+        world.vehicle(bike).unwrap().engine_settings(),
+        &bike_engine()
+    );
+    drive_wheeled(&mut world, car, chassis, |world| {
+        world
+            .vehicle_mut(car)
+            .unwrap()
+            .set_driver_input(DriverInput {
+                forward: 1.0,
+                ..DriverInput::default()
+            })
+            .unwrap()
+    });
 }

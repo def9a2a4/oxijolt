@@ -1,6 +1,8 @@
 //! A leak gate for vehicles: creating a chassis and a vehicle with custom friction and torque
-//! curves, two differentials, anti-roll bars and a sphere tester, driving it a step, reading its
-//! wheels, replacing its tester and removing vehicle and chassis, 100 000 measured rounds
+//! curves, two differentials, anti-roll bars and a sphere tester, driving it a step with a tire
+//! callback, replacing and clearing the callback, reading its wheels, changing its engine,
+//! transmission and differentials, replacing its tester and removing vehicle and chassis,
+//! 100 000 measured rounds
 //! against a 2 MiB threshold, so a leak of more than about 20 bytes per round fails. A control
 //! run then creates vehicle constraints through `oxijolt-sys` and never releases them, and
 //! must exceed the threshold, which shows the gate can see such a leak.
@@ -75,8 +77,27 @@ fn vehicle_round(world: &mut PhysicsWorld, layers: &CarLayers, shape: &Shape, ro
         })
         .unwrap();
     vehicle.set_gravity(GRAVITY).unwrap();
+    vehicle.set_tire_max_impulse_callback(|input| input.default_friction());
     assert!(world.step(DT).unwrap().is_complete());
     assert_eq!(world.vehicle(car).unwrap().wheels().len(), 4);
+    let mut vehicle = world.vehicle_mut(car).unwrap();
+    vehicle.set_tire_max_impulse_callback(|_| TireFriction::default());
+    vehicle.clear_tire_max_impulse_callback();
+    vehicle
+        .set_engine(VehicleEngineSettings::default().max_torque(600.0))
+        .unwrap();
+    vehicle
+        .set_transmission(VehicleTransmissionSettings::default())
+        .unwrap();
+    vehicle
+        .set_differentials(
+            vec![
+                VehicleDifferentialSettings::new(Some(0), Some(1)).engine_torque_ratio(0.5),
+                VehicleDifferentialSettings::new(Some(2), Some(3)).engine_torque_ratio(0.5),
+            ],
+            1.6,
+        )
+        .unwrap();
     world
         .vehicle_mut(car)
         .unwrap()

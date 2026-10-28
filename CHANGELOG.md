@@ -2,6 +2,52 @@
 
 All notable changes to this fork. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+- `BodySettings::mass_and_inertia(mass, inertia)` gives a body its mass and inertia, and Jolt
+  uses neither the shape's mass nor its inertia (`EOverrideMassProperties::MassAndInertiaProvided`);
+  the centre of mass stays the shape's. `Inertia::Principal` takes the moments about the body's
+  axes, `Inertia::Tensor` the full tensor in Jolt's convention, both about the centre of mass in
+  body space. `create_body` refuses an inertia that is not finite or symmetric, has a principal
+  moment below the new `limits::MIN_PROVIDED_INERTIA` (1e-6 kg·m²) or above
+  `6 · mass · limits::MAX_SHAPE_EXTENT²`, or is not diagonal and not positive definite and well
+  conditioned ([limits](docs/limits.md#provided-inertia)). The last of `mass` and
+  `mass_and_inertia` wins; `BodyMut::set_shape` computes the inertia from the new shape again;
+  `RagdollSettings::new_stabilized` refuses parts with a provided inertia.
+- The engine and transmission of every vehicle kind change while it drives:
+  `VehicleRef::engine_settings`, `transmission_settings` and `VehicleMut::set_engine`,
+  `set_transmission`. A change is checked as at creation and refused whole; the rpm, gear, clutch
+  and shift timers carry over. The number of forward and reverse gears and the clutch release
+  time are fixed at creation, since Jolt's state saves the gear and the clutch countdown but not
+  what they are read against; a change of them is the new `VehicleError::FixedAtCreation`. A
+  tank's track drive envelope also covers the track speeds earlier configurations allowed
+  ([limits](docs/limits.md#live-changes)).
+- Wheeled vehicles and motorcycles change their differentials and the limited slip ratio between
+  them (`VehicleMut::set_differentials`, read with `VehicleRef::differentials` and
+  `differential_limited_slip_ratio`), bounded by the new sealed trait `WheeledControllerKind`.
+  Tanks change both tracks' inertia, damping, brake torque and differential ratio
+  (`VehicleMut::set_tracks`, read with `VehicleRef::track_settings`), checked against the
+  chassis' track mass ratio; a track's wheels and driven wheel are fixed at creation.
+- A per-vehicle tire max impulse callback for wheeled vehicles and motorcycles
+  (`VehicleMut::set_tire_max_impulse_callback`, `clear_tire_max_impulse_callback`,
+  `VehicleRef::has_tire_max_impulse_callback`): a `Fn(&TireMaxImpulseInput) -> TireFriction`
+  closure replaces the friction coefficients that Jolt multiplies by the suspension impulse to cap
+  each wheel's tire impulses; each coefficient is clamped to `0..=limits::MAX_FRICTION` and NaN
+  counts as 0. It runs on the solver's threads, so it is `Send + Sync`, and its results do not
+  depend on the thread count as long as they depend only on the input and on data that does not
+  change during the step; a panic in it gives the vehicle Jolt's friction for the rest of the step
+  and is resumed by `step`. The callback is dropped with its vehicle and is not part of
+  `WorldState`.
+- None of the live settings above is part of `WorldState`: a restore keeps the current ones
+  ([state](docs/state.md#what-is-not-saved)).
+- The joltc extension adds `JPH_WheeledVehicleController_SetEngine`, `_SetTransmission`,
+  `_SetDifferentials`, `_SetDifferentialLimitedSlipRatio`, `_ResetTireMaxImpulseCallback` and
+  `JPH_TrackedVehicleController_SetEngine`, `_SetTransmission`, `_SetTrack`. `JOLTC_EXT_REVISION`
+  is 25: a `JOLTC_LIB_DIR` prefix built before this change is refused, the 1.3.0 release archives
+  no longer match and the build falls back to source until the next release, and shape binary
+  states saved by an earlier build are refused with `BinaryStateError::OtherBuild`; save them
+  again.
+
 ## 1.3.0 — 2026-10-27
 
 - `WorldSettings::penetration_slop` and `speculative_contact_distance` set Jolt's penetration

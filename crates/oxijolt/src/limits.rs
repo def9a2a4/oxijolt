@@ -120,6 +120,15 @@ pub const MAX_FRICTION: f32 = 1000.0;
 /// a 1 cm cube of water.
 pub const MIN_MASS: f32 = 1.0e-3;
 
+/// Smallest principal moment of an inertia given with
+/// [`BodySettings::mass_and_inertia`](crate::BodySettings::mass_and_inertia), in kg·m²: Jolt
+/// then never takes its near-zero fallback, and every principal inverse inertia is at most 1e6.
+///
+/// See [docs/limits.md#provided-inertia].
+///
+/// [docs/limits.md#provided-inertia]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#provided-inertia
+pub const MIN_PROVIDED_INERTIA: f32 = 1.0e-6;
+
 /// Largest inverse mass of a movable soft body vertex, in 1/kg: 1000, whose inverse Jolt
 /// computes in `f32` as exactly [`MIN_MASS`]. `1.0 / MIN_MASS` itself rounds to 999.99994.
 pub const MAX_VERTEX_INVERSE_MASS: f32 = 1000.0;
@@ -696,6 +705,67 @@ pub(crate) const MASS_RULE: &str = "mass must be between limits::MIN_MASS and li
 /// Whether `mass` is finite and within `MIN_MASS..=MAX_MASS`.
 pub(crate) fn is_mass(mass: f32) -> bool {
     (MIN_MASS..=MAX_MASS).contains(&mass)
+}
+
+/// What a provided inertia's entries must satisfy ([`check_provided_inertia`]).
+pub(crate) const PROVIDED_INERTIA_VALUES_RULE: &str =
+    "provided inertia must be finite and symmetric";
+
+/// What a provided inertia's smallest principal moment must satisfy ([`check_provided_inertia`]).
+pub(crate) const PROVIDED_INERTIA_FLOOR_RULE: &str =
+    "provided inertia needs principal moments of at least limits::MIN_PROVIDED_INERTIA";
+
+/// What a provided inertia's largest principal moment must satisfy ([`check_provided_inertia`]).
+pub(crate) const PROVIDED_INERTIA_CEILING_RULE: &str =
+    "provided inertia moments must be at most 6 * mass * limits::MAX_SHAPE_EXTENT^2";
+
+/// What a provided inertia that is not diagonal must satisfy ([`check_provided_inertia`]).
+pub(crate) const PROVIDED_INERTIA_CONDITION_RULE: &str =
+    "provided inertia must be positive definite and well conditioned";
+
+/// Checks the inertia `tensor` (in rows, kg·m²) provided for a body of `mass`, already within
+/// `MIN_MASS..=MAX_MASS`, and returns the rule it breaks. Computed in `f64`; the rules are
+/// derived in [docs/limits.md#provided-inertia].
+///
+/// [docs/limits.md#provided-inertia]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#provided-inertia
+pub(crate) fn check_provided_inertia(mass: f32, tensor: [[f32; 3]; 3]) -> Result<(), &'static str> {
+    let finite = tensor.iter().flatten().all(|value| value.is_finite());
+    let symmetric = (0..3).all(|i| (0..3).all(|j| tensor[i][j] == tensor[j][i]));
+    if !(finite && symmetric) {
+        return Err(PROVIDED_INERTIA_VALUES_RULE);
+    }
+    let t = tensor.map(|row| row.map(f64::from));
+    let extent = f64::from(MAX_SHAPE_EXTENT);
+    let ceiling = 6.0 * f64::from(mass) * extent * extent;
+    let floor = f64::from(MIN_PROVIDED_INERTIA);
+    let diagonal = [t[0][0], t[1][1], t[2][2]];
+    if t[0][1] == 0.0 && t[0][2] == 0.0 && t[1][2] == 0.0 {
+        // Jolt decomposes a diagonal tensor exactly, so the diagonal is what it inverts.
+        if !diagonal.iter().all(|&moment| moment >= floor) {
+            return Err(PROVIDED_INERTIA_FLOOR_RULE);
+        }
+        if !diagonal.iter().all(|&moment| moment <= ceiling) {
+            return Err(PROVIDED_INERTIA_CEILING_RULE);
+        }
+        return Ok(());
+    }
+    if !is_rigid_body_inertia(t) {
+        return Err(PROVIDED_INERTIA_CONDITION_RULE);
+    }
+    let [[a, b, c], [d, e, f], [g, h, i]] = t;
+    let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    let minors = (a * e - b * d) + (a * i - c * g) + (e * i - f * h);
+    let frobenius = t.iter().flatten().map(|v| v * v).sum::<f64>().sqrt();
+    // `det / minors` is at most the smallest principal moment, and the moment Jolt's `f32`
+    // decomposition returns is within the residual bound `8 u |I|_F` of it.
+    if det / minors < floor + 8.0 * F32_UNIT_ROUNDOFF * frobenius {
+        return Err(PROVIDED_INERTIA_FLOOR_RULE);
+    }
+    // The Frobenius norm is at least the largest principal moment.
+    if frobenius > ceiling {
+        return Err(PROVIDED_INERTIA_CEILING_RULE);
+    }
+    Ok(())
 }
 
 /// Whether `inverse_mass` is the inverse of a mass within `MIN_MASS..=MAX_MASS`: the range of

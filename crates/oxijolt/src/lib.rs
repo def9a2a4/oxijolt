@@ -173,6 +173,7 @@ mod math;
 #[cfg(feature = "mint")]
 mod mint_interop;
 mod owned;
+mod panic_slot;
 pub mod prelude;
 mod query;
 mod ragdoll;
@@ -184,7 +185,7 @@ mod world;
 
 pub use body::{
     Activation, AllowedDofs, BodyId, BodyMut, BodyPose, BodyRef, BodySettings, BuoyancySettings,
-    MotionQuality, MotionType,
+    Inertia, MotionQuality, MotionType,
 };
 pub use character::{
     BodyVelocity, CharacterContact, CharacterContactKey, CharacterContactListener,
@@ -241,12 +242,12 @@ pub use soft_body::{
 };
 pub use state::{BodySelection, WorldState};
 pub use vehicle::{
-    AnyVehicleId, DriverInput, Motorcycle, MotorcycleLean, MotorcycleSettings, TrackSide,
-    TrackState, TrackedDriverInput, TrackedVehicle, TrackedVehicleSettings, TrackedWheelSettings,
-    VehicleAntiRollBar, VehicleCollisionTester, VehicleDifferentialSettings, VehicleEngineSettings,
-    VehicleId, VehicleKind, VehicleMut, VehicleRef, VehicleTrackSettings,
-    VehicleTransmissionSettings, VehicleType, WheelContact, WheelSettings, WheelState,
-    WheeledVehicle, WheeledVehicleSettings,
+    AnyVehicleId, DriverInput, Motorcycle, MotorcycleLean, MotorcycleSettings, TireFriction,
+    TireMaxImpulseInput, TrackSide, TrackState, TrackedDriverInput, TrackedVehicle,
+    TrackedVehicleSettings, TrackedWheelSettings, VehicleAntiRollBar, VehicleCollisionTester,
+    VehicleDifferentialSettings, VehicleEngineSettings, VehicleId, VehicleKind, VehicleMut,
+    VehicleRef, VehicleTrackSettings, VehicleTransmissionSettings, VehicleType, WheelContact,
+    WheelSettings, WheelState, WheeledControllerKind, WheeledVehicle, WheeledVehicleSettings,
 };
 pub use world::{PhysicsWorld, StepReport, WorldSettings};
 

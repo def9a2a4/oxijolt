@@ -806,3 +806,26 @@ fn wheels_pass_through_soft_bodies_to_the_ground() {
         );
     }
 }
+
+#[test]
+fn a_chassis_with_provided_inertia_drives_finitely() {
+    let (mut world, layers) = car_world(Vec3::ZERO, 1);
+    add_ground(&mut world, &layers, false);
+    // About the inertia of the chassis box at 1500 kg, rounded.
+    let inertia = Inertia::Principal(Vec3::new(2000.0, 2500.0, 500.0));
+    let body = chassis_settings(&layers, RVec3::new(0.0, 0.9, 0.0), Quat::IDENTITY)
+        .mass_and_inertia(1500.0, inertia);
+    let (chassis, car) = add_car_with(&mut world, &body, VehicleCollisionTester::ray(layers.probe));
+    world
+        .vehicle_mut(car)
+        .unwrap()
+        .set_gravity(GRAVITY)
+        .unwrap();
+    step(&mut world, 30);
+    drive(&mut world, car, throttle(0.5), 120);
+    let body = world.body(chassis).unwrap();
+    let position = v3(body.position());
+    assert!(position.iter().all(|c| c.is_finite()), "{position:?}");
+    assert!(length(body.angular_velocity()).is_finite());
+    assert!(position[2] > 2.0, "{position:?}");
+}

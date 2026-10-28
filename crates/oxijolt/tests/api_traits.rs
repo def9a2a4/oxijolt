@@ -12,6 +12,7 @@ fn id<T: Clone + Copy + Debug + PartialEq + Eq + PartialOrd + Ord + Hash>() {}
 fn error<T: Clone + Copy + Debug + PartialEq + Eq + Error>() {}
 fn settings<T: Clone + Debug + PartialEq>() {}
 fn default<T: Default>() {}
+fn copy<T: Copy>() {}
 
 #[test]
 fn ids_compare_order_and_hash() {
@@ -51,6 +52,8 @@ fn errors_are_copy_and_comparable() {
 #[test]
 fn settings_are_clone_and_comparable() {
     settings::<BodySettings>();
+    settings::<Inertia>();
+    copy::<Inertia>();
     settings::<BuoyancySettings>();
     settings::<ExtendedUpdateSettings>();
     settings::<CharacterContactSettings>();

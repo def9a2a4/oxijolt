@@ -61,6 +61,14 @@ vehicle_kinds! {
     Motorcycle => Motorcycle;
 }
 
+/// A vehicle kind whose controller is Jolt's `WheeledVehicleController`: [`WheeledVehicle`] and
+/// [`Motorcycle`], whose `MotorcycleController` derives from it. It selects the methods of
+/// [`VehicleRef`](crate::VehicleRef) and [`VehicleMut`](crate::VehicleMut) for differentials.
+pub trait WheeledControllerKind: VehicleKind {}
+
+impl WheeledControllerKind for WheeledVehicle {}
+impl WheeledControllerKind for Motorcycle {}
+
 /// Identifies a vehicle of kind `K` in the world that created it.
 ///
 /// The raw value is 1 for the first vehicle of a world, then 2, 3 and so on, whatever the kind;

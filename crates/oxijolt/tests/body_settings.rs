@@ -1,5 +1,5 @@
 //! Body configuration fixed at creation: locked axes (allowed degrees of freedom) and where
-//! they are refused, and user data.
+//! they are refused, user data, and a provided mass and inertia.
 
 mod common;
 
@@ -401,4 +401,323 @@ fn remove_body_guards_still_hold() {
         world.remove_body(chassis),
         Err(BodyError::UsedByVehicle(chassis))
     );
+}
+
+/// A 2 x 0.5 x 1 m box.
+fn plank() -> Shape {
+    Shape::new_box(Vec3::new(1.0, 0.25, 0.5)).unwrap()
+}
+
+/// The angular velocity a body of `shape` made from `settings` has right after the angular
+/// impulse `(1, 1, 1)` N·m·s, in a world without gravity.
+fn spin_after_unit_impulse(shape: &Shape, settings: &BodySettings) -> Vec3 {
+    let mut world = world(Vec3::ZERO, 1);
+    let id = world.create_body(shape, settings).unwrap();
+    world
+        .body_mut(id)
+        .unwrap()
+        .add_angular_impulse(Vec3::new(1.0, 1.0, 1.0))
+        .unwrap();
+    world.body(id).unwrap().angular_velocity()
+}
+
+#[test]
+fn provided_inertia_spins_the_body_as_given() {
+    let provided = BodySettings::new_dynamic()
+        .mass_and_inertia(3.0, Inertia::Principal(Vec3::new(1.0, 2.0, 4.0)));
+    let w = spin_after_unit_impulse(&plank(), &provided);
+    let distance = |a: Vec3| length(Vec3::new(a.x - 1.0, a.y - 0.5, a.z - 0.25));
+    assert!(distance(w) <= 1.0e-6, "{w:?}");
+    let scaled = spin_after_unit_impulse(&plank(), &BodySettings::new_dynamic().mass(3.0));
+    assert!(distance(scaled) > 0.1, "{scaled:?}");
+}
+
+/// `Inertia::Tensor` of `R · diag(moments) · Rᵀ` for the rotation `q`, rounded to `f32` and
+/// exactly symmetric.
+fn rotated_tensor(moments: [f64; 3], q: Quat) -> Inertia {
+    let [x, y, z, w] = [q.x, q.y, q.z, q.w].map(f64::from);
+    let r = [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ];
+    let entry = |i: usize, j: usize| {
+        let (i, j) = (i.min(j), i.max(j));
+        (0..3).map(|k| r[i][k] * moments[k] * r[j][k]).sum::<f64>() as f32
+    };
+    Inertia::Tensor(std::array::from_fn(|i| {
+        std::array::from_fn(|j| entry(i, j))
+    }))
+}
+
+/// A rotation that leaves no axis of the body a principal axis.
+fn tilt() -> Quat {
+    quat_about(Vec3::new(0.3, -0.5, 0.8), 0.7)
+}
+
+/// Checks that a body of `mass` and `inertia` is refused with a rule containing `phrase` and
+/// that the world keeps its bodies.
+fn assert_refused(world: &mut PhysicsWorld, mass: f32, inertia: Inertia, phrase: &str) {
+    let before = world.body_count();
+    let settings = BodySettings::new_dynamic().mass_and_inertia(mass, inertia);
+    match world.create_body(&plank(), &settings) {
+        Err(BodyError::InvalidValue(rule)) => {
+            assert!(rule.contains(phrase), "{inertia:?}: {rule}")
+        }
+        other => panic!("{inertia:?} with {mass} kg: {other:?}"),
+    }
+    assert_eq!(world.body_count(), before);
+}
+
+const VALUES: &str = "finite and symmetric";
+const FLOOR: &str = "at least limits::MIN_PROVIDED_INERTIA";
+const CEILING: &str = "at most 6 * mass * limits::MAX_SHAPE_EXTENT^2";
+const CONDITION: &str = "positive definite and well conditioned";
+const MASS: &str = "mass must be between limits::MIN_MASS and limits::MAX_MASS";
+
+/// `6 · mass · MAX_SHAPE_EXTENT²` in `f64`, the largest moment a body of `mass` may be given.
+fn ceiling(mass: f32) -> f64 {
+    6.0 * f64::from(mass) * f64::from(limits::MAX_SHAPE_EXTENT).powi(2)
+}
+
+/// The largest `f32` at most `value`.
+fn f32_at_most(value: f64) -> f32 {
+    let rounded = value as f32;
+    if f64::from(rounded) > value {
+        rounded.next_down()
+    } else {
+        rounded
+    }
+}
+
+#[test]
+fn invalid_provided_inertia_is_refused() {
+    let mut world = world(Vec3::ZERO, 1);
+    let principal = |x: f32, y: f32, z: f32| Inertia::Principal(Vec3::new(x, y, z));
+    let mut tensor = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    assert_refused(&mut world, 1.0, principal(f32::NAN, 1.0, 1.0), VALUES);
+    tensor[1][2] = f32::INFINITY;
+    tensor[2][1] = f32::INFINITY;
+    assert_refused(&mut world, 1.0, Inertia::Tensor(tensor), VALUES);
+    tensor[1][2] = 0.1;
+    tensor[2][1] = 0.0;
+    assert_refused(&mut world, 1.0, Inertia::Tensor(tensor), VALUES);
+
+    for moments in [
+        (0.0, 1.0, 1.0),
+        (1.0, -1.0, 1.0),
+        (1.0, 1.0, 5.0e-7),
+        (1.0e-30, 1.0, 1.0),
+    ] {
+        assert_refused(
+            &mut world,
+            1.0,
+            principal(moments.0, moments.1, moments.2),
+            FLOOR,
+        );
+    }
+    let below_floor = [
+        [5.0e-7, 1.0e-8, 0.0],
+        [1.0e-8, 5.0e-7, 0.0],
+        [0.0, 0.0, 5.0e-7],
+    ];
+    assert_refused(&mut world, 1.0, Inertia::Tensor(below_floor), FLOOR);
+
+    let indefinite = [[1.0, 2.0, 0.0], [2.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    assert_refused(&mut world, 1.0, Inertia::Tensor(indefinite), CONDITION);
+    let needle = rotated_tensor([1.0, 1.0, 1.0e-5], tilt());
+    assert_refused(&mut world, 1.0, needle, CONDITION);
+
+    let above = (ceiling(1.0) as f32).next_up();
+    assert_refused(&mut world, 1.0, principal(1.0, above, 1.0), CEILING);
+    // Every moment is below the ceiling, the Frobenius norm 1.01 times above it.
+    let c = ceiling(1.0);
+    let wide = rotated_tensor([0.7 * c, 0.7 * c, 0.2 * c], tilt());
+    assert_refused(&mut world, 1.0, wide, CEILING);
+
+    for mass in [
+        0.0,
+        limits::MIN_MASS.next_down(),
+        limits::MAX_MASS.next_up(),
+    ] {
+        assert_refused(&mut world, mass, principal(1.0, 1.0, 1.0), MASS);
+    }
+}
+
+#[test]
+fn the_last_mass_setter_wins() {
+    let provided = Inertia::Principal(Vec3::new(1.0, 2.0, 4.0));
+    let mass_last = BodySettings::new_dynamic()
+        .mass_and_inertia(3.0, provided)
+        .mass(2.0);
+    assert_eq!(mass_last, BodySettings::new_dynamic().mass(2.0));
+    assert_eq!(
+        spin_after_unit_impulse(&plank(), &mass_last),
+        spin_after_unit_impulse(&plank(), &BodySettings::new_dynamic().mass(2.0))
+    );
+
+    let inertia_last = BodySettings::new_dynamic()
+        .mass(2.0)
+        .mass_and_inertia(3.0, provided);
+    let only_inertia = BodySettings::new_dynamic().mass_and_inertia(3.0, provided);
+    assert_eq!(inertia_last, only_inertia);
+    assert_eq!(
+        spin_after_unit_impulse(&plank(), &inertia_last),
+        spin_after_unit_impulse(&plank(), &only_inertia)
+    );
+}
+
+#[test]
+fn set_shape_recomputes_provided_inertia_from_the_shape() {
+    let shape = plank();
+    let mut world = world(Vec3::ZERO, 1);
+    let provided = BodySettings::new_dynamic()
+        .mass_and_inertia(3.0, Inertia::Principal(Vec3::new(1.0, 2.0, 4.0)));
+    let id = world.create_body(&shape, &provided).unwrap();
+    let mut body = world.body_mut(id).unwrap();
+    body.set_shape(&shape, Some(3.0), Activation::DontActivate)
+        .unwrap();
+    body.add_angular_impulse(Vec3::new(1.0, 1.0, 1.0)).unwrap();
+    let after = world.body(id).unwrap().angular_velocity();
+    let scaled = spin_after_unit_impulse(&shape, &BodySettings::new_dynamic().mass(3.0));
+    assert_eq!(after, scaled);
+    assert_ne!(after, spin_after_unit_impulse(&shape, &provided));
+}
+
+/// The smallest scale `s` in `[low, high]`, to about 1e-6 relative, for which a body of `mass`
+/// with `inertia(s)` is accepted, given that `low` is refused and `high` accepted; returns the
+/// accepted inertia and the refused one just below it.
+fn boundary(
+    world: &mut PhysicsWorld,
+    mass: f32,
+    inertia: impl Fn(f64) -> Inertia,
+    (mut low, mut high): (f64, f64),
+) -> (Inertia, Inertia) {
+    let accepted = |world: &mut PhysicsWorld, s: f64| {
+        let settings = BodySettings::new_dynamic().mass_and_inertia(mass, inertia(s));
+        match world.create_body(&plank(), &settings) {
+            Ok(id) => {
+                world.remove_body(id).unwrap();
+                true
+            }
+            Err(BodyError::InvalidValue(_)) => false,
+            Err(error) => panic!("{error}"),
+        }
+    };
+    assert!(!accepted(world, low) && accepted(world, high));
+    while high - low > 1.0e-6 * high {
+        let middle = 0.5 * (low + high);
+        if accepted(world, middle) {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    (inertia(high), inertia(low))
+}
+
+/// The largest value `x * 0.99^k` (for the first such `k`) that `accepts` takes.
+fn largest_accepted(mut x: f32, mut accepts: impl FnMut(f32) -> bool) -> f32 {
+    for _ in 0..10_000 {
+        if accepts(x) {
+            return x;
+        }
+        x *= 0.99;
+    }
+    panic!("nothing accepted down to {x}");
+}
+
+/// Drops a body of `mass` and `inertia` onto a static floor after the largest angular impulse
+/// and torque it accepts, and checks 60 ticks of finite motion with a non-zero spin (an
+/// overflowing angular velocity clamp gives an exact zero in a release build). The body never
+/// sleeps, which would zero its spin too.
+fn steps_finitely(mass: f32, inertia: Inertia) {
+    let mut world = world(GRAVITY, 1);
+    add_floor(&mut world);
+    let settings = BodySettings::new_dynamic()
+        .position(RVec3::new(0.0, 0.3, 0.0))
+        .allow_sleeping(false)
+        .mass_and_inertia(mass, inertia);
+    let id = world.create_body(&plank(), &settings).unwrap();
+    let along = |m: f32| Vec3::new(0.48 * m, 0.6 * m, 0.64 * m);
+    let mut body = world.body_mut(id).unwrap();
+    largest_accepted(1.0e18, |m| body.add_angular_impulse(along(m)).is_ok());
+    largest_accepted(1.0e22, |m| body.add_torque(along(m)).is_ok());
+    for tick in 0..60 {
+        step(&mut world, 1);
+        let body = world.body(id).unwrap();
+        let (p, q) = (body.position(), body.rotation());
+        let (v, w) = (body.linear_velocity(), body.angular_velocity());
+        let finite = [p.x, p.y, p.z].iter().all(|c| c.is_finite())
+            && [q.x, q.y, q.z, q.w, v.x, v.y, v.z, w.x, w.y, w.z]
+                .iter()
+                .all(|c| c.is_finite());
+        assert!(
+            finite,
+            "{mass} kg, {inertia:?}, tick {tick}: {p:?} {q:?} {v:?} {w:?}"
+        );
+        assert_ne!(w, Vec3::ZERO, "{mass} kg, {inertia:?}, tick {tick}");
+    }
+}
+
+/// Principal moments as a function of a scale.
+type Moments = fn(f64) -> [f64; 3];
+
+#[test]
+fn provided_inertia_at_its_bounds_steps_finitely() {
+    let mut world = world(Vec3::ZERO, 1);
+    let floor = f64::from(limits::MIN_PROVIDED_INERTIA);
+    let principal = |[x, y, z]: [f32; 3]| Inertia::Principal(Vec3::new(x, y, z));
+    for mass in [limits::MIN_MASS, limits::MAX_MASS] {
+        let top = ceiling(mass);
+        let mut cases = vec![
+            principal([limits::MIN_PROVIDED_INERTIA; 3]),
+            principal([f32_at_most(top); 3]),
+        ];
+        for k in 0..3 {
+            let mut moments = [1.0; 3];
+            moments[k] = limits::MIN_PROVIDED_INERTIA;
+            cases.push(principal(moments));
+            let mut moments = [limits::MIN_PROVIDED_INERTIA; 3];
+            moments[k] = f32_at_most(top);
+            cases.push(principal(moments));
+        }
+        // Rotated tensors at the floor (repeated and close moments), at the ceiling, and at the
+        // conditioning bound with one and with two small moments.
+        let families: [(Moments, (f64, f64)); 5] = [
+            (|s| [s, s, s], (0.5 * floor, 10.0 * floor)),
+            (|s| [s, 1.1 * s, 1.3 * s], (0.5 * floor, 10.0 * floor)),
+            (|s| [s, 0.9 * s, 0.6 * s], (top, 0.1 * top)),
+            (|s| [1.0, 1.0, s], (1.0e-6, 1.0e-2)),
+            (|s| [s, 1.0e-3, 1.0e-3], (10.0, 1.0e-2)),
+        ];
+        for (moments, range) in families {
+            let rotated = |s: f64| rotated_tensor(moments(s), tilt());
+            let (inside, outside) = if range.0 < range.1 {
+                boundary(&mut world, mass, rotated, range)
+            } else {
+                // A ceiling: search the inverse scale.
+                let inverse = |t: f64| rotated(1.0 / t);
+                boundary(&mut world, mass, inverse, (1.0 / range.0, 1.0 / range.1))
+            };
+            let settings = BodySettings::new_dynamic().mass_and_inertia(mass, outside);
+            assert!(world.create_body(&plank(), &settings).is_err());
+            cases.push(inside);
+        }
+        for inertia in cases {
+            steps_finitely(mass, inertia);
+        }
+    }
 }

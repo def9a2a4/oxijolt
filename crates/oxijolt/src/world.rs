@@ -34,8 +34,9 @@ use crate::constraint::ConstraintEntry;
 use crate::job_system::{create_caller_job_system, QueueContext};
 use crate::jolt_assert;
 use crate::limits;
-use crate::listener::{first_payload, Listeners};
+use crate::listener::Listeners;
 use crate::owned::{JoltObject, Owned};
+use crate::panic_slot::first_payload;
 use crate::ragdoll::RagdollEntry;
 use crate::vehicle::VehicleEntry;
 use crate::{CharacterContactListener, StepError, Vec3, WorldError};
@@ -293,7 +294,7 @@ impl Drop for PhysicsWorld {
 // job system is `Send + Sync` by the `JobSystem` bound, and its native callback object is
 // `Send + Sync` (see `CallbackJobSystem`). Jolt's single-threaded job system runs jobs on the
 // stepping thread and holds no thread-local or thread-bound state, so it has no thread affinity
-// either.
+// either. Vehicle tire max impulse callbacks are `Send + Sync` by their bound.
 unsafe impl Send for PhysicsWorld {}
 // SAFETY: no `&self` method touches the job system. Every `&self` method only calls Jolt's
 // locking body interface, read-only system
@@ -326,7 +327,9 @@ unsafe impl Send for PhysicsWorld {}
 // deactivates or removes bodies, which happens only in `&mut self` methods: no `&self` method
 // steps, adds, removes or wakes a body, and `event_settings` only reads the context's immutable
 // settings. The character contact listener is `Send + Sync` by its bound and is called only from
-// the `&mut self` character updates and refreshes.
+// the `&mut self` character updates and refreshes. Vehicle tire max impulse callbacks are
+// `Send + Sync` by their bound and run only inside `step`; `&self` methods only read whether a
+// vehicle has one.
 unsafe impl Sync for PhysicsWorld {}
 
 /// Jolt's `PhysicsSettings` of `system`, copied out by joltc.
@@ -606,6 +609,11 @@ impl PhysicsWorld {
     /// panic came first. It also resumes a callback panic from between steps that
     /// [`take_events`](Self::take_events) has not resumed yet.
     ///
+    /// A panic in a vehicle's tire max impulse callback (see
+    /// [`VehicleMut::set_tire_max_impulse_callback`](crate::VehicleMut::set_tire_max_impulse_callback))
+    /// does not stop the step either: `step` resumes it after the update, unless a `queue_job`
+    /// or event callback panic came first.
+    ///
     /// [`JobSystem`]: crate::JobSystem
     pub fn step(&mut self, delta_time: f32) -> Result<StepReport, StepError> {
         self.step_with_collision_steps(delta_time, 1)
@@ -691,7 +699,8 @@ impl PhysicsWorld {
         }
         let job_panic = self.job_system.finish_update();
         let listeners = self.listeners.finish_step();
-        if let Some(payload) = first_payload(job_panic, listeners.panic) {
+        let panic = first_payload(job_panic, listeners.panic);
+        if let Some(payload) = first_payload(panic, self.take_tire_callback_panics()) {
             std::panic::resume_unwind(payload);
         }
         Ok(StepReport {

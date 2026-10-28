@@ -20,6 +20,48 @@ the sharing.
 ragdoll parts and characters' inner bodies included, for example to fold the whole world into a
 digest that compares runs.
 
+## Mass and inertia
+
+By default Jolt computes a body's mass and inertia from its shape at a density of 1000 kg/m³.
+`BodySettings::mass(kg)` sets the mass and scales the shape's inertia to it.
+`BodySettings::mass_and_inertia(kg, inertia)` sets both, and the shape's own mass and inertia are
+not used (Jolt `EOverrideMassProperties::MassAndInertiaProvided`), for example a box hull with the
+inertia of the vehicle it stands for. The centre of mass stays the shape's in either case. The last of the two
+calls wins.
+
+`Inertia::Principal(moments)` gives the moments about the body's x, y and z axes, which are then
+its principal axes. `Inertia::Tensor(rows)` gives the full symmetric tensor as Jolt stores it: the
+moments on the diagonal, the negated products of inertia off it. Both are in kg·m², about the
+centre of mass, in the body's local axes.
+
+`PhysicsWorld::create_body` checks the mass as for `mass` and refuses with
+`BodyError::InvalidValue` an inertia that is not finite or not symmetric, has a principal moment
+below `limits::MIN_PROVIDED_INERTIA` (1e-6 kg·m²) or above `6 · mass · limits::MAX_SHAPE_EXTENT²`,
+or, when it is not diagonal, is not positive definite and well conditioned
+([limits](limits.md#provided-inertia)).
+
+`BodyMut::set_shape` computes the mass properties from the new shape again, with the mass it is
+given. `RagdollSettings::new_stabilized` refuses parts with a provided inertia: Jolt's
+stabilization rescales the inertia with the part's new mass.
+
+```rust
+use oxijolt::*;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut world = PhysicsWorld::new(WorldSettings::default().gravity(Vec3::ZERO))?;
+    let plank = Shape::new_box(Vec3::new(1.0, 0.25, 0.5))?;
+    let inertia = Inertia::Principal(Vec3::new(1.0, 2.0, 4.0));
+    let settings = BodySettings::new_dynamic().mass_and_inertia(3.0, inertia);
+    let body = world.create_body(&plank, &settings)?;
+
+    // An angular impulse of 2 N·m·s about z turns the body at 2 / 4 rad/s.
+    world.body_mut(body)?.add_angular_impulse(Vec3::new(0.0, 0.0, 2.0))?;
+    let spin = world.body(body)?.angular_velocity();
+    assert!((spin.z - 0.5).abs() < 1e-6, "{spin:?}");
+    Ok(())
+}
+```
+
 ## Impulses and forces
 
 A force (`add_force`) acts over the next step and is cleared after it. An impulse changes the

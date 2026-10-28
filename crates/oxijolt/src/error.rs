@@ -605,6 +605,10 @@ pub enum VehicleError {
     /// different steps; see
     /// [`MotorcycleSettings::lean_spring_integration_coefficient`](crate::MotorcycleSettings::lean_spring_integration_coefficient).
     LeanSpringIntegrationNotSaved,
+    /// A setting that a vehicle's saved state depends on; it can only be set at creation. The
+    /// payload names it, for example the gear counts and the clutch release time of
+    /// [`VehicleMut::set_transmission`](crate::VehicleMut::set_transmission).
+    FixedAtCreation(&'static str),
 }
 
 impl fmt::Display for VehicleError {
@@ -620,6 +624,9 @@ impl fmt::Display for VehicleError {
             Self::LeanSpringIntegrationNotSaved => f.write_str(
                 "a motorcycle's lean spring integration coefficient must be 0: Jolt does not save the integrated lean angle",
             ),
+            Self::FixedAtCreation(what) => {
+                write!(f, "{what} cannot change after the vehicle is created")
+            }
         }
     }
 }

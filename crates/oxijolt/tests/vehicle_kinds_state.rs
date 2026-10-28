@@ -1,14 +1,15 @@
-//! Rollback with tracked vehicles and motorcycles: a tank and a motorcycle replay bit for bit
-//! after a save, a divergent detour and a restore, from a save before their first contact, in
-//! a turn and during a gear shift, with 1 and 4 workers and across processes. Jolt saves the
-//! tracked input, the track speeds and the motorcycle's target lean; it does not save the
-//! motorcycle's integrated lean angle, which the default integration coefficient of 0 leaves
-//! without effect.
+//! Rollback with tracked vehicles and motorcycles: a tank, a motorcycle and a car replay bit for
+//! bit after a save, a divergent detour and a restore, from a save before their first contact,
+//! in a turn and during a gear shift, with 1 and 4 workers and across processes. Each vehicle's
+//! engine and transmission change right after the save; a restore keeps them, so the replay
+//! matches a straight run that changed them at the save. Jolt saves the tracked input, the track
+//! speeds and the motorcycle's target lean; it does not save the motorcycle's integrated lean
+//! angle, which the default integration coefficient of 0 leaves without effect.
 
 mod common;
 
 use common::determinism::{assert_same, child_request, digest_in_child, finish_child, Digest};
-use common::vehicle::{car_world, record_vehicle, CarLayers, GRAVITY};
+use common::vehicle::{add_car, car_world, record_vehicle, CarLayers, GRAVITY};
 use common::vehicle_kinds::*;
 use common::*;
 use oxijolt::*;
@@ -50,11 +51,13 @@ impl SavePoint {
     }
 }
 
-/// A tank and a motorcycle under world gravity on flat ground.
+/// A tank and a motorcycle under world gravity and the test car under its gravity override, on
+/// flat ground.
 struct Scene {
     world: PhysicsWorld,
     tank: VehicleId<TrackedVehicle>,
     bike: VehicleId<Motorcycle>,
+    car: VehicleId,
 }
 
 impl Scene {
@@ -73,10 +76,26 @@ impl Scene {
             RVec3::new(4.0, 1.5, 0.0),
             Quat::IDENTITY,
         );
-        Self { world, tank, bike }
+        let (_, car) = add_car(
+            &mut world,
+            &layers,
+            RVec3::new(14.0, 1.0, 0.0),
+            Quat::IDENTITY,
+        );
+        world
+            .vehicle_mut(car)
+            .unwrap()
+            .set_gravity(GRAVITY)
+            .unwrap();
+        Self {
+            world,
+            tank,
+            bike,
+            car,
+        }
     }
 
-    /// The scripted inputs of `tick`.
+    /// The scripted inputs of `tick`; the car takes the motorcycle's.
     fn inputs(tick: usize) -> (TrackedDriverInput, DriverInput) {
         let tank = if tick < 90 {
             tracks(1.0, 1.0, 1.0)
@@ -102,6 +121,48 @@ impl Scene {
             .unwrap()
             .set_driver_input(bike)
             .unwrap();
+        self.world
+            .vehicle_mut(self.car)
+            .unwrap()
+            .set_driver_input(bike)
+            .unwrap();
+    }
+
+    /// Gives every vehicle a stronger engine and longer gears, with the gear counts and clutch
+    /// release time of creation; the car a longer differential, the tank heavier tracks with
+    /// stronger brakes.
+    fn retune(&mut self) {
+        let longer = |ratios: &[f32]| ratios.iter().map(|ratio| 1.1 * ratio).collect::<Vec<_>>();
+        let mut tank = self.world.vehicle_mut(self.tank).unwrap();
+        tank.set_engine(TrackedVehicleSettings::default_engine().max_torque(650.0))
+            .unwrap();
+        tank.set_transmission(
+            TrackedVehicleSettings::default_transmission()
+                .gear_ratios(longer(&[4.0, 3.0, 2.0, 1.0])),
+        )
+        .unwrap();
+        let track = |x: f32| {
+            tank_track(x)
+                .inertia(10.5)
+                .max_brake_torque(18000.0)
+                .differential_ratio(6.5)
+        };
+        tank.set_tracks(track(1.7), track(-1.7)).unwrap();
+        let mut bike = self.world.vehicle_mut(self.bike).unwrap();
+        bike.set_engine(bike_engine().max_torque(170.0)).unwrap();
+        bike.set_transmission(bike_transmission().gear_ratios(longer(&BIKE_GEAR_RATIOS)))
+            .unwrap();
+        let mut car = self.world.vehicle_mut(self.car).unwrap();
+        car.set_engine(VehicleEngineSettings::default().max_torque(600.0))
+            .unwrap();
+        car.set_transmission(
+            VehicleTransmissionSettings::default()
+                .gear_ratios(longer(&[2.66, 1.78, 1.3, 1.0, 0.74])),
+        )
+        .unwrap();
+        let differential =
+            VehicleDifferentialSettings::new(Some(0), Some(1)).differential_ratio(3.8);
+        car.set_differentials(vec![differential], 1.6).unwrap();
     }
 
     /// The inputs of `tick`, then one step.
@@ -135,6 +196,7 @@ impl Scene {
             push(state, value);
         }
         push(state, lean.angle);
+        record_vehicle(&self.world, self.car, state);
     }
 
     /// A run that differs from the straight one: the tank brakes and turns the other way, the
@@ -208,6 +270,7 @@ fn straight(point: SavePoint, threads: u32) -> Digest {
     for tick in 0..save {
         scene.tick(tick);
     }
+    scene.retune();
     let mut digest = Digest::new();
     for tick in save..save + AFTER_SAVE {
         scene.tick(tick);
@@ -224,6 +287,7 @@ fn replay(point: SavePoint, threads: u32) -> Digest {
         scene.tick(tick);
     }
     let saved = scene.world.save_state();
+    scene.retune();
     scene.detour();
     scene.world.restore_state(&saved).unwrap();
     // A first replay, abandoned half-way, then the recorded one.

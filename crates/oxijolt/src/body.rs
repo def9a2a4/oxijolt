@@ -5,8 +5,8 @@ use std::fmt;
 use oxijolt_sys::*;
 
 use crate::limits::{
-    self, is_angular_velocity, is_friction, is_gravity_factor, is_in_frame, is_linear_velocity,
-    is_mass,
+    self, check_provided_inertia, is_angular_velocity, is_friction, is_gravity_factor, is_in_frame,
+    is_linear_velocity, is_mass,
 };
 use crate::math::{is_finite_non_negative, ROTATION_RULE};
 use crate::owned::{JoltObject, Owned};
@@ -21,6 +21,7 @@ mod handle;
 mod kinematic;
 mod load;
 mod lock;
+mod mass;
 mod poses;
 mod structure;
 
@@ -30,6 +31,8 @@ pub use dofs::AllowedDofs;
 pub use handle::{BodyMut, BodyRef};
 pub(crate) use kinematic::kinematic_velocities;
 pub(crate) use lock::{with_locked_bodies, with_locked_body, with_read_locked_body};
+pub use mass::Inertia;
+pub(crate) use mass::MassOverride;
 pub use poses::BodyPose;
 
 /// Identifies a body in the world that created it.
@@ -172,7 +175,7 @@ pub struct BodySettings {
     restitution: f32,
     linear_damping: f32,
     angular_damping: f32,
-    pub(crate) mass: Option<f32>,
+    pub(crate) mass: Option<MassOverride>,
     motion_quality: MotionQuality,
     gravity_factor: f32,
     allow_sleeping: bool,
@@ -348,12 +351,52 @@ impl BodySettings {
     /// By default Jolt computes mass and inertia from the shape with a density of 1000 kg/m³.
     /// A kinematic body whose shape contains a mesh needs this override: Jolt computes no mass
     /// for a mesh. A body of a mesh alone has zero inertia, for which Jolt uses that of a unit
-    /// sphere; a compound keeps the inertia of its other children.
+    /// sphere; a compound keeps the inertia of its other children. It replaces an earlier
+    /// [`mass_and_inertia`](Self::mass_and_inertia): the last of the two calls wins.
     ///
     /// [`PhysicsWorld::create_body`]: crate::PhysicsWorld::create_body
     #[must_use]
     pub fn mass(mut self, value: f32) -> Self {
-        self.mass = Some(value);
+        self.mass = Some(MassOverride::Mass(value));
+        self
+    }
+
+    /// Overrides the mass in kg and the inertia (Jolt
+    /// `EOverrideMassProperties::MassAndInertiaProvided`): the shape's own mass and inertia are
+    /// not used, and the centre of mass stays the shape's. It replaces an earlier
+    /// [`mass`](Self::mass): the last of the two calls wins.
+    ///
+    /// The mass follows the rules of [`mass`](Self::mass). [`PhysicsWorld::create_body`] refuses
+    /// with [`BodyError::InvalidValue`] an inertia that is not finite or not symmetric, whose
+    /// smallest principal moment is below [`limits::MIN_PROVIDED_INERTIA`], whose largest exceeds
+    /// `6 · mass · limits::MAX_SHAPE_EXTENT²`, or, when it is not diagonal, that is not positive
+    /// definite and well conditioned ([`Inertia`] and [docs/limits.md#provided-inertia] have the
+    /// details).
+    ///
+    /// [`BodyMut::set_shape`] computes the inertia from the new shape again.
+    /// [`RagdollSettings::new_stabilized`] refuses parts with a provided inertia.
+    ///
+    /// ```
+    /// use oxijolt::*;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut world = PhysicsWorld::new(WorldSettings::default())?;
+    /// let shape = Shape::new_box(Vec3::new(1.0, 0.25, 0.5))?;
+    /// let inertia = Inertia::Principal(Vec3::new(1.0, 2.0, 4.0));
+    /// let settings = BodySettings::new_dynamic().mass_and_inertia(3.0, inertia);
+    /// world.create_body(&shape, &settings)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`PhysicsWorld::create_body`]: crate::PhysicsWorld::create_body
+    /// [`limits::MIN_PROVIDED_INERTIA`]: crate::limits::MIN_PROVIDED_INERTIA
+    /// [docs/limits.md#provided-inertia]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#provided-inertia
+    /// [`BodyMut::set_shape`]: crate::BodyMut::set_shape
+    /// [`RagdollSettings::new_stabilized`]: crate::RagdollSettings::new_stabilized
+    #[must_use]
+    pub fn mass_and_inertia(mut self, mass: f32, inertia: Inertia) -> Self {
+        self.mass = Some(MassOverride::MassAndInertia { mass, inertia });
         self
     }
 
@@ -532,8 +575,11 @@ impl BodySettings {
             return invalid(limits::GRAVITY_FACTOR_RULE);
         }
         if let Some(mass) = self.mass {
-            if !is_mass(mass) {
+            if !is_mass(mass.mass()) {
                 return invalid(limits::MASS_RULE);
+            }
+            if let Some(tensor) = mass.tensor() {
+                check_provided_inertia(mass.mass(), tensor).map_err(BodyError::InvalidValue)?;
             }
         }
         if !self.allowed_dofs.has_translation() {
@@ -573,12 +619,20 @@ const ZERO_MASS_PROPERTIES: JPH_MassProperties = JPH_MassProperties {
 
 /// The mass and inertia Jolt gives a body made from `shape` (Jolt
 /// `BodyCreationSettings::GetMassProperties` with the default inertia multiplier): the shape's
-/// own, scaled to `mass` when it is overridden.
-pub(crate) fn mass_properties(shape: &Shape, mass: Option<f32>) -> JPH_MassProperties {
+/// own, scaled to the mass of a [`MassOverride::Mass`], or the provided ones of a
+/// [`MassOverride::MassAndInertia`] without asking the shape.
+pub(crate) fn mass_properties(shape: &Shape, mass: Option<MassOverride>) -> JPH_MassProperties {
+    let scaled_to = match mass {
+        Some(MassOverride::MassAndInertia { mass, inertia }) => {
+            return mass::to_jph(mass, inertia.tensor())
+        }
+        Some(MassOverride::Mass(mass)) => Some(mass),
+        None => None,
+    };
     let mut properties = ZERO_MASS_PROPERTIES;
     // SAFETY: `shape` is live for the call; `properties` is a live local that joltc overwrites.
     unsafe { JPH_Shape_GetMassProperties(shape.as_ptr(), &mut properties) };
-    if let Some(mass) = mass {
+    if let Some(mass) = scaled_to {
         // SAFETY: `properties` is a live local that joltc reads and overwrites.
         unsafe { JPH_MassProperties_ScaleToMass(&mut properties, mass) };
     }
@@ -685,17 +739,25 @@ impl CreationSettings {
             unsafe { JPH_BodyCreationSettings_SetCollisionGroup(ptr, &group) };
         }
         if let Some(mass) = settings.mass {
-            // Jolt ignores the inertia with `CalculateInertia` (`BodyCreationSettings.cpp`).
-            let mass_properties = JPH_MassProperties {
-                mass,
-                ..ZERO_MASS_PROPERTIES
-            };
-            // SAFETY: `ptr` is live; `mass_properties` is a live local that joltc copies.
-            unsafe {
-                JPH_BodyCreationSettings_SetOverrideMassProperties(
-                    ptr,
+            let (mode, mass_properties) = match mass {
+                // Jolt ignores the inertia with `CalculateInertia` (`BodyCreationSettings.cpp`).
+                MassOverride::Mass(mass) => (
                     JPH_OverrideMassProperties_CalculateInertia,
-                );
+                    JPH_MassProperties {
+                        mass,
+                        ..ZERO_MASS_PROPERTIES
+                    },
+                ),
+                MassOverride::MassAndInertia { mass, inertia } => (
+                    JPH_OverrideMassProperties_MassAndInertiaProvided,
+                    mass::to_jph(mass, inertia.tensor()),
+                ),
+            };
+            // SAFETY: `ptr` is live; `mass_properties` is a live local that joltc copies. A
+            // provided inertia was checked by the caller's validation, so Jolt decomposes it
+            // into finite inverse moments.
+            unsafe {
+                JPH_BodyCreationSettings_SetOverrideMassProperties(ptr, mode);
                 JPH_BodyCreationSettings_SetMassPropertiesOverride(ptr, &mass_properties);
             }
         }

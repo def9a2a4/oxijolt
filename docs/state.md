@@ -173,7 +173,10 @@ documentation asks for body friction. These setters change such configuration:
 - cone: `set_half_cone_angle`;
 - swing-twist: `set_swing_motor_settings`, `set_twist_motor_settings`, `set_max_friction_torque`;
 - six-DOF: `set_motor_settings`;
-- vehicle: `set_gravity`, `set_max_pitch_roll_angle`, `set_collision_tester`;
+- vehicle: `set_gravity`, `set_max_pitch_roll_angle`, `set_collision_tester`, `set_engine`,
+  `set_transmission`, `set_differentials`, `set_tracks`, `set_tire_max_impulse_callback` and
+  `clear_tire_max_impulse_callback` (a restore keeps the callback and does not rewind what it
+  captured; the engine's rpm, the gear, the clutch and the track speeds are state and are restored);
 - soft body: `set_vertex_inverse_mass` (a restore keeps the inverse masses set last).
 
 Body properties set at creation (shape, mass, friction, layers) are not saved either; the body

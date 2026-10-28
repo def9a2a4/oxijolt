@@ -717,6 +717,40 @@ chain whose masses `Stabilize` redistributes) create and step seeded rotated sle
 thinnest thickness the floor accepts and check that one 1e-4 thinner is refused; each aborts with
 the floor divided by 6 and passes with it divided by 3.
 
+## Provided inertia
+
+`BodySettings::mass_and_inertia` hands Jolt the tensor as given
+(`EOverrideMassProperties::MassAndInertiaProvided`, `BodyCreationSettings.cpp:213-215`), with no
+shape to bound it, so `PhysicsWorld::create_body` checks it in `f64` against four rules, after the
+mass rule:
+
+1. Every entry is finite and `I[i][j] == I[j][i]`.
+2. Floor. A diagonal tensor (every off-diagonal entry exactly 0) is decomposed exactly
+   (`EigenValueSymmetric` returns it unchanged), so each diagonal entry must be at least
+   `MIN_PROVIDED_INERTIA`, 1e-6 kg·m². Then the moment vector is longer than 1e-6, Jolt's
+   near-zero fallback to unit-sphere inertia (`Vec3::IsNearZero` in `MotionProperties.cpp:46-56`)
+   never triggers, and every principal inverse inertia is at most 1e6, inside the `√3 · 1e6` that
+   [Character weight and push](#character-weight-and-push) assumes. An upper bound alone bounds no
+   inverse inertia: `(1e-30, 1, 1)` has a finite tensor and an inverse moment of 1e30. For a tensor
+   that is not diagonal, `det I / (sum of the principal 2 × 2 minors)`, a lower bound of its
+   smallest principal moment, must be at least `MIN_PROVIDED_INERTIA + 8 · u · |I|_F`
+   (`u = 2^-24`): the moment Jolt's `f32` decomposition returns is within the residual bound
+   `8 u |I|_F` of [Soft body inertia](#soft-body-inertia) of the exact one. Jolt reads the `f32`
+   entries as given, so no further error term applies.
+3. Ceiling. Every moment is at most `6 · mass · MAX_SHAPE_EXTENT²`. A body of that mass whose
+   points lie within `MAX_SHAPE_EXTENT` of its centre of mass on every axis has the trace
+   `2 Σ m |r|² <= 6 · mass · MAX_SHAPE_EXTENT²`, so this keeps a provided tensor within what a
+   shape the crate accepts can produce, and every bound derived from masses and extents still
+   holds. A diagonal tensor is checked per moment; for another tensor the Frobenius norm, at
+   least its largest moment, must be at most the ceiling, which refuses some tensors an exact
+   eigenvalue check would accept.
+4. A tensor that is not diagonal must pass the rule of [Rigid body inertia](#rigid-body-inertia):
+   positive definite, with `det I / minors` at least `1001 · 8 · u · |I|_F`.
+
+`RagdollSettings::new_stabilized` refuses parts with a provided inertia: `Ragdoll::Stabilize`
+multiplies the tensor by the part's new mass over its old (`Ragdoll.cpp:130-140`), which can take a
+moment below the floor. `BodyMut::set_shape` computes the inertia from the new shape again.
+
 ## Soft body inertia
 
 Jolt sums a soft body's inertia tensor about the body origin in `f32` from its vertices
@@ -975,6 +1009,33 @@ wide-ratio tracks gave NaN on the second step, in the default and the asserts bu
 inertia range or the radius ratio removed instead, the envelope refuses the two probes above by
 itself: those ranges keep its inputs physical.
 
+### Live changes
+
+`VehicleMut::set_engine`, `set_transmission` and `set_tracks` change the drivetrain of a tracked
+vehicle that is already moving, and Jolt never clamps a track's speed. After a change the tracks do not start at
+rest. The vehicle keeps two bounds over every configuration it had: each track's largest speed
+`Ω_old,i`, and the largest weighted speed `β_old`, measured with the inertias `I_old,i` of the
+configuration before. With the new inertias `I_i` the weighted speed then starts at most at
+
+```text
+B_0 = min(Ω_old,l/I_l + Ω_old,r/I_r,  β_old·max(I_old,l/I_l, I_old,r/I_r))
+```
+
+(the first from each track's bound, the second because `|ω_i|/I_i = (|ω_i|/I_old,i)·(I_old,i/I_i)`).
+The induction above starts from `B ≤ B_0`, so the new configuration keeps
+
+```text
+β' = max(β, B_0)
+|ω_i| ≤ Ω_i = max(Ω_old,i, β'·min(I_i, I_j/r))
+```
+
+and the envelope is checked with these `Ω_i`; `β'` and `Ω_i` become the stored bounds. A change
+the envelope refuses changes nothing. A change that keeps the inertias gives `B_0 ≤ β_old ≤ β'`,
+so applying the same configuration again leaves the bounds as they are; the first bound alone
+would double `β'` on each such change for tracks of equal inertia. A `WorldState` restore can only
+bring back track speeds that some configuration the vehicle had allowed, and the stored bounds
+cover every configuration: the track speed bounds are running maxima and never shrink.
+
 ## Track inertia ratio
 
 Under each unbraked wheel in contact, Jolt sizes the longitudinal impulse for that track's inertia
@@ -1014,8 +1075,9 @@ synchronisation and the friction limit move that onset, so the bound is measured
 
 `PhysicsWorld::create_tracked_vehicle` computes `M·w` for every wheel in `f64` from the chassis'
 inverse mass, principal inverse inertia, inertia rotation and centre of mass, and refuses the
-vehicle when any wheel's exceeds `MAX_TRACK_MASS_RATIO` (0.25). `w` is the largest the wheel can
-give:
+vehicle when any wheel's exceeds `MAX_TRACK_MASS_RATIO` (0.25). `VehicleMut::set_tracks` checks
+new tracks the same way, with the chassis' mass properties of creation: a chassis cannot change
+its shape or motion type while a vehicle uses it. `w` is the largest the wheel can give:
 - `d` is any direction in the wheel's forward/up plane. Jolt's longitudinal direction is the
   ground normal crossed with the wheel's right (`VehicleConstraint.cpp:254-271`), so it lies in
   that plane: along the wheel's forward on ground perpendicular to the wheel's up, turned toward
@@ -1131,6 +1193,41 @@ sliding on a floor, both at `f32::MAX`, had NaN velocities within three 60 Hz st
 
 `MAX_FRICTION` keeps that product finite: any coefficient whose square is finite (below about
 1.8e19) does, and 1000 is far above the friction of real materials.
+
+### Tire friction
+
+A tire max impulse callback returns two friction coefficients. The binding clamps each to
+`0..=MAX_FRICTION`, NaN to 0, and hands Jolt the coefficient times the suspension impulse as the
+tire's impulse cap, the formula of Jolt's default (`WheeledVehicleController.h:191-196`). Without
+a callback the coefficient is the wheel's friction curve combined with the ground's friction,
+`sqrt(curve · ground)` (`VehicleConstraint.h:238-243`), which Jolt reads nowhere else. A curve
+of `MAX_FRICTION` on ground of `MAX_FRICTION` gives exactly `MAX_FRICTION`, so a callback can
+give a wheel no grip a vehicle without one cannot have, and the cap is finite for the reason
+above.
+
+That much grip does not keep Jolt's solver stable. Jolt sizes each wheel's longitudinal impulse
+for the wheel alone, `(ω − v/r)·I/r` (`WheeledVehicleController.cpp:705-718`), as if the chassis
+stood still, and bounds it only by the cap, so on wheels heavy against their chassis a large cap
+lets the iteration overshoot. Measured through the safe API in the default build: a 1500 kg
+chassis on four wheels of radius 0.35 with a ray tester, settled on flat ground and driven from
+10 m/s through throttle, full steering, brakes and reverse for 4 s, at 1/60 and 0.1 s. With
+friction `MAX_FRICTION` the callback and the curves gave bit-identical runs
+(`the_largest_friction_of_a_callback_matches_the_largest_friction_curves`):
+- a 1.8 × 0.6 × 4 m box on wheels of 1000 kg·m², front wheels steering 70°: Jolt's 500 m/s clamp
+  at tick 227 (1/60 s) and 38 (0.1 s);
+- a 1 × 0.6 × 1 m box on wheels of 8.4 kg·m² at (±0.5, −0.3, ±0.75) with suspension force points
+  at a height of 1.15 m, above the centre of mass: the 15π rad/s clamp at tick 130 and 36;
+- a 0.6 × 4 × 0.6 m box with wheels of 3.84 kg·m² 3 m ahead and behind, front wheels steering 70°:
+  at most 12.5 m/s and 9.2 rad/s.
+
+With Jolt's default curves on ground of friction 0.2 none of the three reached a clamp; the
+second came closest, 40.6 rad/s at 0.1 s.
+
+Not covered:
+- Wheels heavy against their chassis at large friction, from a callback or from curves: no bound
+  on the wheel inertia is derived, and the first two cases above reach Jolt's clamps.
+- Friction curve values are not bounded: a 1500 kg chassis on wheels of 1000 kg·m² with friction
+  1e30 was thrown 395 m up while settling, without any callback.
 
 ## Coupling ratios
 

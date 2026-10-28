@@ -1,6 +1,7 @@
 //! Tracked vehicles: a tank pivots in place and climbs a slope, its wheels turn with its
 //! tracks, input and settings are checked, and the chassis guards, testers, soft bodies and
-//! rebase work as for wheeled vehicles.
+//! rebase work as for wheeled vehicles. A tank whose drivetrain is raised while its light tracks
+//! spin fast keeps stepping finitely.
 
 mod common;
 
@@ -645,4 +646,83 @@ fn rebase_rotates_a_tanks_gravity_override_and_tester_up() {
         .filter(|wheel| wheel.contact.is_some())
         .count();
     assert!(down >= 14, "{down} wheels down after the rebase");
+}
+
+#[test]
+fn live_tank_engine_changes_after_fast_driving_step_finitely() {
+    let (mut world, layers) = car_world(GRAVITY, 1);
+    add_ground(&mut world, &layers, Quat::IDENTITY);
+    let light = |x: f32| tank_track(x).inertia(limits::MIN_TRACK_INERTIA);
+    let settings = TrackedVehicleSettings::new(
+        light(1.7),
+        light(-1.7),
+        VehicleCollisionTester::ray(layers.probe),
+    );
+    let chassis = world
+        .create_body(
+            &tank_chassis_shape(),
+            &behaviour_chassis(&layers, 4000.0, RVec3::new(0.0, 1.5, 0.0), Quat::IDENTITY),
+        )
+        .unwrap();
+    let tank = world.create_tracked_vehicle(chassis, &settings).unwrap();
+    drive(&mut world, tank, tracks(1.0, 1.0, 1.0), 120);
+    let fast = world.save_state();
+    drive(&mut world, tank, tracks(1.0, -1.0, 1.0), 60);
+
+    // Raise the engine and the gear ratios in turn, tenfold at a time, as far as the drive
+    // envelope takes them from the track speeds the earlier configurations allowed.
+    let mut torque = 500.0_f32;
+    let mut gears = vec![4.0_f32, 3.0, 2.0, 1.0];
+    loop {
+        let engine = TrackedVehicleSettings::default_engine().max_torque(10.0 * torque);
+        let stronger = world.vehicle_mut(tank).unwrap().set_engine(engine).is_ok();
+        if stronger {
+            torque *= 10.0;
+        }
+        let longer: Vec<f32> = gears.iter().map(|ratio| 10.0 * ratio).collect();
+        let transmission =
+            TrackedVehicleSettings::default_transmission().gear_ratios(longer.clone());
+        let geared = world
+            .vehicle_mut(tank)
+            .unwrap()
+            .set_transmission(transmission)
+            .is_ok();
+        if geared {
+            gears = longer;
+        }
+        if !(stronger || geared) {
+            break;
+        }
+    }
+    eprintln!(
+        "accepted max torque {torque:e} N·m, first gear {:e}",
+        gears[0]
+    );
+    assert!(torque > 500.0 && gears[0] > 4.0);
+
+    world.restore_state(&fast).unwrap();
+    for tick in 0..300 {
+        let input = if tick % 60 < 30 {
+            tracks(1.0, 1.0, 1.0)
+        } else {
+            tracks(1.0, -1.0, 1.0)
+        };
+        drive(&mut world, tank, input, 1);
+        let vehicle = world.vehicle(tank).unwrap();
+        assert!(vehicle.engine_rpm().is_finite());
+        for track in vehicle.tracks() {
+            assert!(track.angular_velocity.is_finite(), "tick {tick}: {track:?}");
+        }
+        for wheel in vehicle.wheels() {
+            assert!(wheel.angular_velocity.is_finite() && wheel.rotation_angle.is_finite());
+        }
+        let body = world.body(chassis).unwrap();
+        let [x, y, z] = v3(body.position());
+        assert!(
+            x.is_finite() && y.is_finite() && z.is_finite(),
+            "tick {tick}"
+        );
+        assert!(f3(body.linear_velocity()).iter().all(|v| v.is_finite()));
+        assert!(f3(body.angular_velocity()).iter().all(|v| v.is_finite()));
+    }
 }
