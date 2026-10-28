@@ -10,7 +10,7 @@ use oxijolt_sys::{
     JPH_WheeledVehicleController_SetTireMaxImpulseCallback,
 };
 
-use super::{VehicleMut, VehicleRef, WheeledControllerKind};
+use super::{VehicleCollisionTester, VehicleEntry, VehicleMut, VehicleRef, WheeledControllerKind};
 use crate::panic_slot::PanicSlot;
 use crate::{limits, VehicleError};
 
@@ -216,13 +216,7 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
         &mut self,
         callback: impl Fn(&TireMaxImpulseInput) -> TireMaxImpulse + Send + Sync + 'static,
     ) -> Result<(), VehicleError> {
-        let ratio = self
-            .entry
-            .drivetrain
-            .largest_wheel_mass_ratio(&self.entry.chassis);
-        if !limits::is_wheel_mass_ratio(ratio) {
-            return Err(VehicleError::InvalidValue(limits::WHEEL_MASS_RATIO_RULE));
-        }
+        check_wheel_mass_ratio(self.entry, &self.entry.collision_tester)?;
         let tire = Box::new(TireCallback {
             callback: Box::new(callback),
             panic: PanicSlot::default(),
@@ -260,5 +254,21 @@ impl<K: WheeledControllerKind> VehicleMut<'_, K> {
         // callback dropped below.
         unsafe { JPH_WheeledVehicleController_ResetTireMaxImpulseCallback(controller) };
         self.entry.tire_callback = None;
+    }
+}
+
+/// Refuses wheels heavy against the chassis of the wheeled vehicle or motorcycle `entry` with
+/// the collision `tester` ([`limits::MAX_WHEEL_MASS_RATIO`]).
+pub(super) fn check_wheel_mass_ratio(
+    entry: &VehicleEntry,
+    tester: &VehicleCollisionTester,
+) -> Result<(), VehicleError> {
+    let ratio = entry
+        .drivetrain
+        .largest_wheel_mass_ratio(&entry.chassis, tester);
+    if limits::is_wheel_mass_ratio(ratio) {
+        Ok(())
+    } else {
+        Err(VehicleError::InvalidValue(limits::WHEEL_MASS_RATIO_RULE))
     }
 }

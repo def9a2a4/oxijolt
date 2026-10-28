@@ -515,6 +515,95 @@ fn track_mass_ratio_takes_the_chassis_inertia_at_the_farthest_contact() {
     );
 }
 
+/// The largest lever term `√((p × d)ᵀ M (p × d))`, `M` the body-space inverse inertia given by
+/// its rows, at points `p` (from the centre of mass) at both ends and the middle of `wheel`'s
+/// suspension travel moved by `contact_radius` along 27 directions, and directions `d` of the
+/// wheel's forward/up plane turned about its steering axis by 61 angles within its largest
+/// steering angle: a lower bound of the lever the wheel mass ratio bounds.
+fn sampled_steered_lever(
+    m: [[f64; 3]; 3],
+    wheel: &WheelSettings,
+    center: [f64; 3],
+    contact_radius: f64,
+) -> f64 {
+    let v = |v: Vec3| [v.x, v.y, v.z].map(f64::from);
+    let base = &wheel.base;
+    let (position, direction) = (v(base.position), v(base.suspension_direction));
+    let axis = v(base.steering_axis);
+    let length = f64::from(base.suspension_max_length);
+    let steer = f64::from(wheel.max_steer_angle.abs());
+    let offsets: Vec<[f64; 3]> = (0..27)
+        .map(|k| [k % 3, k / 3 % 3, k / 9].map(|c| f64::from(c) - 1.0))
+        .map(|o| {
+            let n = (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt().max(1.0);
+            o.map(|c| c * contact_radius / n)
+        })
+        .collect();
+    let mut largest = 0.0_f64;
+    for t in [0.0, 0.5, 1.0] {
+        for offset in &offsets {
+            let p: [f64; 3] = std::array::from_fn(|k| {
+                position[k] + t * length * direction[k] + offset[k] - center[k]
+            });
+            for i in 0..=60 {
+                let angle = steer * (f64::from(i) / 30.0 - 1.0);
+                for j in 0..72 {
+                    let (sin, cos) = (f64::from(j) * std::f64::consts::PI / 36.0).sin_cos();
+                    let d = rotated([0.0, sin, cos], axis, angle);
+                    let c = limits::cross(p, d);
+                    let form: f64 = (0..3)
+                        .flat_map(|i| (0..3).map(move |j| (i, j)))
+                        .map(|(i, j)| c[i] * m[i][j] * c[j])
+                        .sum();
+                    largest = largest.max(form.sqrt());
+                }
+            }
+        }
+    }
+    largest
+}
+
+#[test]
+fn wheel_mass_ratio_covers_every_steered_direction_and_contact() {
+    // A chassis whose yaw inertia is small against its pitch and roll inertia, its principal
+    // frame turned 0.4 rad about z from body space.
+    let (a, b, c): (f64, f64, f64) = (1.0 / 2000.0, 1.0 / 90.0, 1.0 / 2000.0);
+    let center = Vec3::new(0.1, -0.2, 0.3);
+    let angle: f64 = 0.4;
+    let (half_sin, half_cos) = (0.5 * angle).sin_cos();
+    let to_principal = Quat::from_xyzw(0.0, 0.0, half_sin as f32, half_cos as f32);
+    let (sin, cos) = angle.sin_cos();
+    let xx = a * cos * cos + b * sin * sin;
+    let yy = a * sin * sin + b * cos * cos;
+    let xy = sin * cos * (b - a);
+    let body = [[xx, xy, 0.0], [xy, yy, 0.0], [0.0, 0.0, c]];
+    let chassis = chassis([a, b, c], to_principal, center);
+    let rake = 30.0_f32.to_radians();
+    for steer in [
+        0.0_f32,
+        0.5,
+        70.0_f32.to_radians(),
+        0.5 * std::f32::consts::PI,
+    ] {
+        for contact_radius in [0.35, 0.8] {
+            let wheel = WheelSettings::new(Vec3::new(0.5, -1.9, 3.0))
+                .radius(0.35)
+                .inertia(1.0)
+                .max_steer_angle(steer)
+                .suspension_direction(Vec3::new(0.0, -rake.cos(), rake.sin()))
+                .steering_axis(Vec3::new(0.0, rake.cos(), -rake.sin()));
+            let ratio = chassis.wheel_mass_ratio(&wheel, contact_radius);
+            let center = [0.1, -0.2, 0.3];
+            let lever = sampled_steered_lever(body, &wheel, center, contact_radius);
+            let sampled = 1.0 / (0.35_f64 * 0.35) * (1.0 / 4000.0 + lever * lever);
+            assert!(
+                sampled <= ratio && ratio <= 1.25 * sampled,
+                "steer {steer}, contact radius {contact_radius}: {ratio} vs sampled {sampled}"
+            );
+        }
+    }
+}
+
 /// The track speed bound of validated `settings` from rest, written out from
 /// docs/limits.md#track-drive-envelope: `Ω_i = β·min(I_i, I_j / r)`.
 fn speeds_from_rest(settings: &TrackedVehicleSettings) -> [f64; 2] {

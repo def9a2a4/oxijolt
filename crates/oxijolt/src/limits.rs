@@ -239,18 +239,20 @@ pub const MAX_TRACK_MASS_RATIO: f32 = 0.25;
 
 /// Largest wheel mass ratio of a wheeled vehicle's or a motorcycle's wheel for a tire max impulse
 /// callback: the wheel's moment of inertia over its radius squared, divided by the smallest
-/// effective mass of the chassis where the wheel pushes it, measured as for
-/// [`MAX_TRACK_MASS_RATIO`].
+/// effective mass of the chassis along any direction the wheel can push it at any steering
+/// angle up to the wheel's largest, wherever the vehicle's collision tester can put the contact.
 ///
 /// Jolt sizes each wheel's driving impulse for the wheel alone, as if the chassis did not move,
 /// and bounds it only by the tire's cap. Above a ratio of 1 the solver overshoots further on
 /// every iteration, and caps far above friction times the suspension impulse let it diverge.
 /// [`VehicleMut::set_tire_max_impulse_callback`] refuses a callback for a vehicle with any wheel
-/// above this bound. Jolt's `MotorcycleTest` motorcycle has a ratio of 0.99.
+/// above this bound, and [`VehicleMut::set_collision_tester`] a tester that puts one above it
+/// while the vehicle has a callback. Jolt's `MotorcycleTest` motorcycle has a ratio of 0.72.
 ///
 /// See [docs/limits.md#wheel-mass-ratio].
 ///
 /// [`VehicleMut::set_tire_max_impulse_callback`]: crate::VehicleMut::set_tire_max_impulse_callback
+/// [`VehicleMut::set_collision_tester`]: crate::VehicleMut::set_collision_tester
 /// [docs/limits.md#wheel-mass-ratio]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#wheel-mass-ratio
 pub const MAX_WHEEL_MASS_RATIO: f32 = 1.0;
 

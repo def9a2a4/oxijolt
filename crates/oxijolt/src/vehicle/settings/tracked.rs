@@ -8,7 +8,7 @@ use super::wheel::WheelBase;
 use super::{
     validate_wheel_count, BuiltSettings, ControllerGuard, VehicleCollisionTester,
     VehicleEngineSettings, VehicleFrame, VehicleTransmissionSettings, WheelGeometry, WheelGuard,
-    ANGULAR_VELOCITY_TO_RPM,
+    WheelSettings, ANGULAR_VELOCITY_TO_RPM,
 };
 use crate::limits::{self, PrincipalMass};
 use crate::math::{is_finite_non_negative, is_finite_positive};
@@ -690,30 +690,117 @@ impl ChassisMass {
 
     /// The largest inverse effective mass of the chassis where `wheel` can push it along any
     /// direction in the wheel's forward/up plane, which holds Jolt's longitudinal direction for
-    /// every ground normal: the lever is taken at the farthest point the wheel's contact can
-    /// reach, and at the suspension force point when the wheel has one.
+    /// every ground normal while the wheel does not steer: the lever is taken at the farthest
+    /// point the wheel's contact can reach, and at the suspension force point when the wheel
+    /// has one.
     fn inverse_effective_mass(&self, wheel: &WheelBase) -> f64 {
-        let principal = |v: Vec3| {
-            let v = self.body_to_principal.rotate(v);
-            [v.x, v.y, v.z].map(f64::from)
-        };
-        let center = self.center_of_mass;
-        let from_center =
-            |p: Vec3| principal(Vec3::new(p.x - center.x, p.y - center.y, p.z - center.z));
-        // Jolt's longitudinal direction is `normal × right` (`VehicleConstraint::OnStep`).
-        let up = limits::normalized(principal(wheel.wheel_up));
-        let right = limits::normalized(limits::cross(principal(wheel.wheel_forward), up));
-        let forward = limits::cross(up, right);
+        let [forward, up] = self.wheel_plane(wheel);
         // Every tester puts the contact within this distance of the attachment point.
         let reach = f64::from(wheel.suspension_max_length)
             + f64::from(wheel.radius).hypot(0.5 * f64::from(wheel.width));
-        let lever_at = |point: Vec3| self.mass.lever_in_plane(from_center(point), forward, up);
+        let lever_at = |point: Vec3| self.mass.lever_in_plane(self.lever_of(point), forward, up);
         let mut lever = lever_at(wheel.position) + reach * self.mass.lever_per_metre();
         if let Some(point) = wheel.suspension_force_point {
             lever = lever.max(lever_at(point));
         }
         self.mass.inverse_mass + lever * lever
     }
+
+    /// The [wheel mass ratio](limits::MAX_WHEEL_MASS_RATIO) of a wheeled vehicle's or a
+    /// motorcycle's `wheel` on this chassis, as derived in [docs/limits.md#wheel-mass-ratio]:
+    /// the wheel's inertia over its radius squared, times the chassis' largest inverse
+    /// effective mass along any longitudinal direction the wheel has at any steering angle
+    /// within its largest one, at any contact within `contact_radius` of the wheel's suspension
+    /// travel, and at the suspension force point when the wheel has one.
+    ///
+    /// [docs/limits.md#wheel-mass-ratio]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#wheel-mass-ratio
+    pub(super) fn wheel_mass_ratio(&self, wheel: &WheelSettings, contact_radius: f64) -> f64 {
+        let base = &wheel.base;
+        let steering = SteeringRange {
+            plane: self.wheel_plane(base),
+            axis: limits::normalized(self.principal(base.steering_axis)),
+            max_angle: f64::from(wheel.max_steer_angle.abs()),
+        };
+        let attachment = self.lever_of(base.position);
+        let direction = self.principal(base.suspension_direction);
+        let length = f64::from(base.suspension_max_length);
+        let end = std::array::from_fn(|k| attachment[k] + length * direction[k]);
+        // The largest lever term is convex in the point, so along the travel it is largest at
+        // one of its ends.
+        let travel = self
+            .steered_lever(attachment, &steering)
+            .max(self.steered_lever(end, &steering));
+        let mut lever = travel + contact_radius * self.mass.lever_per_metre();
+        if let Some(point) = base.suspension_force_point {
+            lever = lever.max(self.steered_lever(self.lever_of(point), &steering));
+        }
+        let radius = f64::from(base.radius);
+        f64::from(wheel.inertia) / (radius * radius) * (self.mass.inverse_mass + lever * lever)
+    }
+
+    /// The largest lever term at `lever` (principal frame, from the centre of mass) along any
+    /// direction of `steering`: the largest at `STEERING_STEPS + 1` evenly spaced angles, plus
+    /// how much it can grow in between. A direction turned by an angle moves by at most that
+    /// angle, and a move of `m` changes the lever term by at most `m · |lever|` times the
+    /// [lever per metre](PrincipalMass::lever_per_metre).
+    fn steered_lever(&self, lever: [f64; 3], steering: &SteeringRange) -> f64 {
+        let [forward, up] = steering.plane;
+        if steering.max_angle == 0.0 {
+            return self.mass.lever_in_plane(lever, forward, up);
+        }
+        let step = 2.0 * steering.max_angle / f64::from(STEERING_STEPS);
+        let largest = (0..=STEERING_STEPS)
+            .map(|k| {
+                let angle = f64::from(k) * step - steering.max_angle;
+                let turn = |v| rotated(v, steering.axis, angle);
+                self.mass.lever_in_plane(lever, turn(forward), turn(up))
+            })
+            .fold(0.0, f64::max);
+        let length = lever.iter().map(|c| c * c).sum::<f64>().sqrt();
+        largest + 0.5 * step * length * self.mass.lever_per_metre()
+    }
+
+    /// The wheel's unsteered forward and up, orthonormal in the principal frame. They span the
+    /// plane that holds Jolt's longitudinal direction, `normal × right`
+    /// (`VehicleConstraint::OnStep`), for every ground normal.
+    fn wheel_plane(&self, wheel: &WheelBase) -> [[f64; 3]; 2] {
+        let up = limits::normalized(self.principal(wheel.wheel_up));
+        let right = limits::normalized(limits::cross(self.principal(wheel.wheel_forward), up));
+        [limits::cross(up, right), up]
+    }
+
+    /// `v`, a body-space vector, in the principal frame.
+    fn principal(&self, v: Vec3) -> [f64; 3] {
+        let v = self.body_to_principal.rotate(v);
+        [v.x, v.y, v.z].map(f64::from)
+    }
+
+    /// Where `p`, a body-space point, lies from the centre of mass, in the principal frame.
+    fn lever_of(&self, p: Vec3) -> [f64; 3] {
+        let center = self.center_of_mass;
+        self.principal(Vec3::new(p.x - center.x, p.y - center.y, p.z - center.z))
+    }
+}
+
+/// How many equal parts a wheel's steering range is split into for its
+/// [wheel mass ratio](ChassisMass::wheel_mass_ratio).
+const STEERING_STEPS: u32 = 32;
+
+/// The longitudinal directions a steered wheel can have: its unsteered forward/up `plane`
+/// turned about the steering `axis` by at most `max_angle` radians either way, as Jolt turns
+/// the wheel's basis (`VehicleConstraint::GetWheelLocalBasis`). All in the principal frame.
+struct SteeringRange {
+    plane: [[f64; 3]; 2],
+    axis: [f64; 3],
+    max_angle: f64,
+}
+
+/// `v` turned about the unit `axis` by `angle` radians (Rodrigues' formula).
+fn rotated(v: [f64; 3], axis: [f64; 3], angle: f64) -> [f64; 3] {
+    let (sin, cos) = angle.sin_cos();
+    let across = limits::cross(axis, v);
+    let along = (0..3).map(|k| axis[k] * v[k]).sum::<f64>() * (1.0 - cos);
+    std::array::from_fn(|k| v[k] * cos + across[k] * sin + axis[k] * along)
 }
 
 /// Largest value a term of the [drive envelope](TrackedVehicleSettings::drive_envelope) may

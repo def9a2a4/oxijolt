@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use oxijolt_sys::*;
 
 use super::settings::MAX_PITCH_ROLL_RULE;
+use super::tire::check_wheel_mass_ratio;
 use super::{install_tester, VehicleCollisionTester, VehicleEntry, VehicleKind, WheeledVehicle};
 use crate::{limits, Vec3, VehicleError, VehicleRef};
 
@@ -179,11 +180,20 @@ impl<K: VehicleKind> VehicleMut<'_, K> {
     /// next step tests the wheels with it.
     /// Not part of [`WorldState`](crate::WorldState):
     /// [`PhysicsWorld::restore_state`](crate::PhysicsWorld::restore_state) does not undo it.
+    ///
+    /// # Errors
+    /// [`VehicleError::InvalidValue`] when the tester does not fit the wheels, or when the
+    /// vehicle has a [tire max impulse callback](crate::VehicleMut::set_tire_max_impulse_callback) and a wheel
+    /// is heavy against the chassis with this tester ([`limits::MAX_WHEEL_MASS_RATIO`]); the
+    /// vehicle keeps its tester.
     pub fn set_collision_tester(
         &mut self,
         tester: VehicleCollisionTester,
     ) -> Result<(), VehicleError> {
         tester.validate(self.object_layer_count, self.entry.wheels.iter().copied())?;
+        if self.entry.tire_callback.is_some() {
+            check_wheel_mass_ratio(self.entry, &tester)?;
+        }
         install_tester(self.entry, tester);
         Ok(())
     }

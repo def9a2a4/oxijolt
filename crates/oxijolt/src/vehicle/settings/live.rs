@@ -171,14 +171,19 @@ impl LiveDrivetrain {
     }
 
     /// The largest [wheel mass ratio](limits::MAX_WHEEL_MASS_RATIO) of a wheeled vehicle's or
-    /// a motorcycle's wheels on `chassis`, as derived in [docs/limits.md#wheel-mass-ratio].
+    /// a motorcycle's wheels on `chassis` with the collision `tester`, as derived in
+    /// [docs/limits.md#wheel-mass-ratio].
     ///
     /// [docs/limits.md#wheel-mass-ratio]: https://github.com/pockerhead/oxijolt/blob/main/docs/limits.md#wheel-mass-ratio
-    pub(crate) fn largest_wheel_mass_ratio(&self, chassis: &ChassisMass) -> f64 {
+    pub(crate) fn largest_wheel_mass_ratio(
+        &self,
+        chassis: &ChassisMass,
+        tester: &VehicleCollisionTester,
+    ) -> f64 {
         self.wheeled()
             .wheels
             .iter()
-            .map(|wheel| chassis.mass_ratio(wheel.inertia, &wheel.base))
+            .map(|wheel| chassis.wheel_mass_ratio(wheel, tester.contact_radius(&wheel.base)))
             .fold(0.0, f64::max)
     }
 

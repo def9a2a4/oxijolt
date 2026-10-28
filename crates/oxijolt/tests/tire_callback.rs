@@ -379,30 +379,62 @@ fn unbounded_caps_stay_finite() {
     }
 }
 
-/// A box chassis of `mass` (half extents 0.9, 0.3, 2.0, centre of mass in its middle) on four
-/// wheels of radius 0.35 and moment of inertia `inertia`, settled on flat ground for a second.
-fn heavy_wheel_car(mass: f32, inertia: f32) -> (PhysicsWorld, BodyId, VehicleId) {
+/// A box chassis for the wheel mass ratio tests: its half extents, and where its front right
+/// wheel is attached; the other three mirror it.
+#[derive(Clone, Copy, Debug)]
+struct Hull {
+    half_extents: Vec3,
+    front_right_wheel: Vec3,
+}
+
+/// A car-shaped box with its wheels under its corners.
+const BOX_CAR: Hull = Hull {
+    half_extents: Vec3::new(0.9, 0.3, 2.0),
+    front_right_wheel: Vec3::new(0.9, -0.1, 1.4),
+};
+
+/// A tall narrow box with its wheels 3 m ahead and behind: its yaw inertia is small against
+/// its pitch and roll inertia, so a steered wheel pushes it much harder sideways than forward.
+const POLE: Hull = Hull {
+    half_extents: Vec3::new(0.3, 2.0, 0.3),
+    front_right_wheel: Vec3::new(0.5, -1.9, 3.0),
+};
+
+/// A `hull` chassis of `mass` (centre of mass in its middle) on four wheels of radius 0.35 and
+/// moment of inertia `inertia`, the front ones steering up to `steer` radians, settled on flat
+/// ground for a second.
+fn heavy_wheel_car(
+    hull: Hull,
+    mass: f32,
+    inertia: f32,
+    steer: f32,
+) -> (PhysicsWorld, BodyId, VehicleId) {
     let mut world = PhysicsWorld::new(WorldSettings::default()).unwrap();
     let floor = Shape::new_box(Vec3::new(500.0, 1.0, 500.0)).unwrap();
     let ground = BodySettings::new_static().position(RVec3::new(0.0, -1.0, 0.0));
     world.create_body(&floor, &ground).unwrap();
-    let hull = Shape::new_box(Vec3::new(0.9, 0.3, 2.0)).unwrap();
+    let Vec3 { x, y, z } = hull.front_right_wheel;
+    // The longest suspension of 0.5 m plus the wheel's radius just reaches the ground.
+    let height = 0.9 - y;
     let body = BodySettings::new_dynamic()
         .mass(mass)
         .allow_sleeping(false)
-        .position(RVec3::new(0.0, 1.0, 0.0));
-    let chassis = world.create_body(&hull, &body).unwrap();
-    let wheel = |x: f32, z: f32| {
-        WheelSettings::new(Vec3::new(x, -0.1, z))
+        .position(RVec3::new(0.0, Real::from(height), 0.0));
+    let chassis = world
+        .create_body(&Shape::new_box(hull.half_extents).unwrap(), &body)
+        .unwrap();
+    let wheel = |x: f32, z: f32, steer: f32| {
+        WheelSettings::new(Vec3::new(x, y, z))
             .radius(0.35)
             .inertia(inertia)
+            .max_steer_angle(steer)
     };
     let settings = WheeledVehicleSettings::new(
         vec![
-            wheel(0.9, 1.4),
-            wheel(-0.9, 1.4),
-            wheel(0.9, -1.4),
-            wheel(-0.9, -1.4),
+            wheel(x, z, steer),
+            wheel(-x, z, steer),
+            wheel(x, -z, 0.0),
+            wheel(-x, -z, 0.0),
         ],
         vec![VehicleDifferentialSettings::new(Some(0), Some(1))],
         VehicleCollisionTester::ray(ObjectLayer::MOVING),
@@ -457,19 +489,24 @@ fn drive_from_10_m_s(world: &mut PhysicsWorld, chassis: BodyId, id: VehicleId, d
     }
 }
 
+/// Jolt's default largest steering angle of a wheel, 70°.
+const DEFAULT_STEER: f32 = 70.0 * std::f32::consts::PI / 180.0;
+
+/// Whether `result` is the wheel mass ratio's refusal.
+fn is_mass_ratio_refusal(result: &Result<(), VehicleError>) -> bool {
+    matches!(result, Err(VehicleError::InvalidValue(what)) if what.contains("MAX_WHEEL_MASS_RATIO"))
+}
+
 #[test]
 fn wheels_heavy_against_the_chassis_refuse_a_callback() {
     for inertia in [1000.0, 1.0e25] {
-        let (mut world, chassis, id) = heavy_wheel_car(1500.0, inertia);
+        let (mut world, chassis, id) = heavy_wheel_car(BOX_CAR, 1500.0, inertia, DEFAULT_STEER);
         for cap in [f32::INFINITY, f32::MAX] {
             let refused = world
                 .vehicle_mut(id)
                 .unwrap()
                 .set_tire_max_impulse_callback(caps_of(cap));
-            assert!(
-                matches!(refused, Err(VehicleError::InvalidValue(what)) if what.contains("MAX_WHEEL_MASS_RATIO")),
-                "{refused:?}"
-            );
+            assert!(is_mass_ratio_refusal(&refused), "{refused:?}");
             assert!(!world.vehicle(id).unwrap().has_tire_max_impulse_callback());
         }
         // Jolt's own caps keep such wheels finite.
@@ -477,10 +514,58 @@ fn wheels_heavy_against_the_chassis_refuse_a_callback() {
     }
 }
 
-/// The heaviest wheel inertia the car of `mass` takes a callback with, within 0.1 %.
-fn heaviest_accepted_inertia(mass: f32) -> f32 {
+#[test]
+fn steered_wheels_count_their_sideways_push() {
+    // Wheels of 3.84 kg m^2 on the 1500 kg pole pass a ratio taken over the unsteered
+    // forward/up plane only; steering 70° with unbounded caps, they threw the chassis to Jolt's
+    // angular velocity clamp within three steps.
+    let inertia = 3.84;
+    let (mut world, chassis, id) = heavy_wheel_car(POLE, 1500.0, inertia, DEFAULT_STEER);
+    let refused = world
+        .vehicle_mut(id)
+        .unwrap()
+        .set_tire_max_impulse_callback(caps_of(f32::INFINITY));
+    assert!(is_mass_ratio_refusal(&refused), "{refused:?}");
+    drive_from_10_m_s(&mut world, chassis, id, DT);
+    // Without steering they push the pole only forward and up, and take the callback.
+    let (mut world, _, id) = heavy_wheel_car(POLE, 1500.0, inertia, 0.0);
+    world
+        .vehicle_mut(id)
+        .unwrap()
+        .set_tire_max_impulse_callback(caps_of(f32::INFINITY))
+        .unwrap();
+}
+
+#[test]
+fn a_tester_that_reaches_farther_is_refused_while_a_callback_is_installed() {
+    let inertia = heaviest_accepted_inertia(BOX_CAR, 1500.0, DEFAULT_STEER);
+    let (mut world, _, id) = heavy_wheel_car(BOX_CAR, 1500.0, inertia, DEFAULT_STEER);
+    let mut vehicle = world.vehicle_mut(id).unwrap();
+    // A sphere wider than the wheel puts the contact farther from the suspension than the ray,
+    // so the same wheels are heavier against the chassis.
+    let sphere = VehicleCollisionTester::cast_sphere(ObjectLayer::MOVING, 0.8);
+    vehicle.set_collision_tester(sphere).unwrap();
+    let refused = vehicle.set_tire_max_impulse_callback(caps_of(f32::INFINITY));
+    assert!(is_mass_ratio_refusal(&refused), "{refused:?}");
+    let ray = VehicleCollisionTester::ray(ObjectLayer::MOVING);
+    vehicle.set_collision_tester(ray).unwrap();
+    vehicle
+        .set_tire_max_impulse_callback(caps_of(f32::INFINITY))
+        .unwrap();
+    let refused = vehicle.set_collision_tester(sphere);
+    assert!(is_mass_ratio_refusal(&refused), "{refused:?}");
+    assert_eq!(world.vehicle(id).unwrap().collision_tester(), ray);
+    // Without a callback the tester is free again.
+    let mut vehicle = world.vehicle_mut(id).unwrap();
+    vehicle.clear_tire_max_impulse_callback();
+    vehicle.set_collision_tester(sphere).unwrap();
+}
+
+/// The heaviest wheel inertia the `hull` car of `mass` with front wheels steering up to
+/// `steer` takes a callback with, within 0.1 %.
+fn heaviest_accepted_inertia(hull: Hull, mass: f32, steer: f32) -> f32 {
     let accepts = |inertia: f32| {
-        let (mut world, _, id) = heavy_wheel_car(mass, inertia);
+        let (mut world, _, id) = heavy_wheel_car(hull, mass, inertia, steer);
         let accepted = world
             .vehicle_mut(id)
             .unwrap()
@@ -488,8 +573,8 @@ fn heaviest_accepted_inertia(mass: f32) -> f32 {
             .is_ok();
         accepted
     };
-    let (mut light, mut heavy) = (0.9, 1000.0);
-    assert!(accepts(light) && !accepts(heavy), "mass {mass}");
+    let (mut light, mut heavy) = (0.01, 1000.0);
+    assert!(accepts(light) && !accepts(heavy), "{hull:?}, mass {mass}");
     while heavy > 1.001 * light {
         let middle = (light * heavy).sqrt();
         if accepts(middle) {
@@ -503,18 +588,24 @@ fn heaviest_accepted_inertia(mass: f32) -> f32 {
 
 #[test]
 fn the_heaviest_accepted_wheels_with_unbounded_caps_stay_finite() {
-    for mass in [1500.0, 300.0] {
-        let inertia = heaviest_accepted_inertia(mass);
-        eprintln!("{mass} kg chassis: wheels up to {inertia} kg m^2 take a callback");
-        for cap in [f32::INFINITY, f32::MAX] {
-            for dt in [DT, 0.1] {
-                let (mut world, chassis, id) = heavy_wheel_car(mass, inertia);
-                world
-                    .vehicle_mut(id)
-                    .unwrap()
-                    .set_tire_max_impulse_callback(caps_of(cap))
-                    .unwrap();
-                drive_from_10_m_s(&mut world, chassis, id, dt);
+    let chassis = [(BOX_CAR, 1500.0), (BOX_CAR, 300.0), (POLE, 1500.0)];
+    for (hull, mass) in chassis {
+        for steer_degrees in [0.0_f32, 30.0, 70.0, 89.0] {
+            let steer = steer_degrees.to_radians();
+            let inertia = heaviest_accepted_inertia(hull, mass, steer);
+            eprintln!(
+                "{hull:?}, {mass} kg, steering {steer_degrees}°: wheels up to {inertia} kg m^2 take a callback"
+            );
+            for cap in [f32::INFINITY, f32::MAX] {
+                for dt in [DT, 0.1] {
+                    let (mut world, chassis, id) = heavy_wheel_car(hull, mass, inertia, steer);
+                    world
+                        .vehicle_mut(id)
+                        .unwrap()
+                        .set_tire_max_impulse_callback(caps_of(cap))
+                        .unwrap();
+                    drive_from_10_m_s(&mut world, chassis, id, dt);
+                }
             }
         }
     }
