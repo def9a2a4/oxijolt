@@ -2,7 +2,7 @@
 
 All notable changes to this fork. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 1.4.0 — 2026-10-28
 
 - `BodySettings::mass_and_inertia(mass, inertia)` gives a body its mass and inertia, and Jolt
   uses neither the shape's mass nor its inertia (`EOverrideMassProperties::MassAndInertiaProvided`);
