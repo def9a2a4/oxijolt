@@ -283,7 +283,7 @@ When a step fails:
   replaces the release assets and rewrites `release/v<version>`. Once the version is published, a
   tag run stops at its first job.
 
-`AGENTS.md` ("Releases", "Publishing") has the repository side of this.
+[CONTRIBUTING.md](../CONTRIBUTING.md) ("Releases", "Publishing") has the repository side of this.
 
 ## Regenerating the bindings
 

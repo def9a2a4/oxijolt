@@ -1,5 +1,7 @@
 # CLAUDE.md
 
-All working rules for this repository live in [AGENTS.md](./AGENTS.md); this file only includes it.
+The working rules for this repository live in [CONTRIBUTING.md](./CONTRIBUTING.md) (every contributor) and
+[AGENTS.md](./AGENTS.md) (agents only); this file only includes them.
 
+@CONTRIBUTING.md
 @AGENTS.md
